@@ -1,203 +1,257 @@
-# Research Base Plan
+# Research Base 计划
 
-## 1. Base
+## 1. 基线与定位
 
-This fork is the long-term research workstation base derived from `lzszq/dsh-scholar`.
+本仓库是基于 `lzszq/dsh-scholar` 的长期科研工作台分支，用于构建一个单用户、单项目、Human-in-the-loop 的科研环境。
 
-- Upstream baseline commit: `086b19a2fbd7824dd71dde7ea2043f22888606e0`
-- Development branch: `research-base`
-- Deployment model: single user, single project
-- Runtime model: DSH Scholar runs inside an existing GPU-enabled research container
-- Human role: the human remains the workflow orchestrator and approves research direction, design, execution, and release decisions
+当前基线：
 
-The goal is to preserve DSH Scholar's research-state model while adapting its execution assumptions to the actual research environment.
+- Upstream：`lzszq/dsh-scholar`
+- Upstream 基线提交：`086b19a2fbd7824dd71dde7ea2043f22888606e0`
+- 长期开发分支：`research-base`
+- 使用方式：单用户、单 Project
+- 运行方式：DSH Scholar 运行在一个已经具备 GPU、CUDA、Python 与科研依赖的长期容器中
+- 人的角色：人负责研究方向、方案确认、任务分配、结果判断与最终发布决策
 
-## 2. Architecture decisions
+本 Fork 的目标不是重新设计一套 Research OS，而是在保留 DSH Scholar 现有科研状态模型的基础上，使它适配实际科研工作环境。
 
-Three components have clear ownership boundaries.
+## 2. 总体架构原则
 
-### DSH
+系统分成三个明确层次：DSH、DSH Scholar 和 Research Container。三者职责保持清晰，避免模型、工具、科研状态和执行环境相互侵入。
 
-DSH is the agent and tool runtime.
+### 2.1 DSH：唯一 Agent / Tool Runtime
 
-It owns:
+DSH 负责 Agent 与工具运行时，包括：
 
-- model/provider selection;
-- tool registry and tool execution;
-- permissions and approvals;
-- sessions and conversation state;
-- skills and subagents.
+- 模型与 Provider 选择；
+- Tool Registry 与工具执行；
+- 权限、审批和执行策略；
+- Session 与 Conversation；
+- Skills；
+- Subagents。
 
-DeepSeek and local vLLM models should be connected through normal DSH providers.
+DeepSeek 与本地 vLLM 模型均通过 DSH 正常 Provider 接入，不在 Scholar 内新增模型专用后端。
 
-Codex integration should use a provider/adapter that keeps DSH as the authoritative tool runtime. OAuth-based unofficial access is out of scope.
+Codex 后续也应作为 DSH 体系中的 Harness/Provider 接入。目标是保留 Codex 的推理与 Agent 能力，同时让文件、Shell、Web、Scholar Research Tools 等环境操作统一经过 DSH Tool Runtime。
 
-### DSH Scholar
+Codex 集成只考虑官方支持的 CLI、App Server、SDK 或其他明确支持的接口，不采用第三方提取、转发或复用 ChatGPT OAuth / 订阅凭据的方案。
 
-DSH Scholar remains the authoritative research-state layer.
+### 2.2 DSH Scholar：唯一 Research State
 
-We retain its existing concepts and workflow, including:
+DSH Scholar 继续作为科研状态的权威来源。
 
-- Human Gates;
-- Brief / Scope;
-- frozen literature corpus;
-- Idea and Experiment Contract;
-- code/data snapshots;
-- Runs and RunManifest;
-- Evidence and Claims;
-- manuscript workspace;
-- review and release gates.
+第一阶段保留现有核心模型，不重新设计：
 
-The first stage should not redesign these abstractions.
+- Human Gate；
+- Brief / Scope；
+- Frozen Corpus；
+- Idea；
+- Experiment Contract；
+- Code / Data Snapshot；
+- Run 与 RunManifest；
+- Evidence；
+- Claim；
+- Manuscript Workspace；
+- Review；
+- Release Gate。
 
-### Research container
+Agent 可以讨论、提出方案、编写代码和执行任务，但正式科研状态仍由 Scholar 的已有流程管理。
 
-The existing GPU research container is the authoritative execution environment.
+### 2.3 Research Container：正式执行环境
 
-Formal research work should not require Docker-in-Docker.
+DSH Scholar 将运行在一个已经准备好的 GPU Research Container 内。
 
-The container already provides the controlled environment for:
+该容器本身就是科研执行环境，通常已经包含：
 
-- Python / uv;
-- CUDA / NVIDIA GPU;
-- project source code;
-- experiment execution;
-- LaTeX toolchain;
-- Codex/other agent executables when installed.
+- Python / uv；
+- CUDA / NVIDIA GPU；
+- 项目源码；
+- 实验依赖；
+- Git；
+- LaTeX 工具链；
+- Codex 或其他 Agent CLI。
 
-## 3. Phase 1: container-native execution
+因此正式实验和论文编译不应再强制创建第二层 Docker Container。
 
-Add a first-class formal execution target for the current research container.
+我们将把“当前 Research Container”作为 Scholar 的一种正式 Execution Target，而不是把它伪装成现有的 `local-process`。
 
-Proposed target kind:
+## 3. 第一阶段：Container Native Runner
+
+第一阶段只解决一个问题：
+
+> 让 DSH Scholar 可以在当前 GPU Research Container 中直接执行正式实验和 LaTeX 编译，同时完整保留现有科研追溯链。
+
+新增正式执行目标：
 
 ```text
 container-native
 ```
 
-It must be distinct from the existing `local-process` target. `local-process` remains limited to trusted development/smoke tasks.
+它与现有目标并列：
 
-The new target must support formal job kinds such as:
+```text
+local-process       # trusted development / smoke
+local-docker        # 现有 Docker Runner
+container-native    # 当前 Research Container
+remote-ssh          # 远程 Runner
+```
 
-- baseline;
-- pilot;
-- formal;
-- reproduce;
-- analysis where applicable;
-- latex-compile.
+`local-process` 的原语义保持不变，仍然只用于开发和 smoke，不允许通过修改名称或降低校验来承载正式实验。
 
-The new execution path should preserve the existing Scholar provenance chain:
+Container Native Runner 需要支持：
+
+- baseline；
+- pilot；
+- formal；
+- reproduce；
+- analysis（适用时）；
+- latex-compile。
+
+新的执行路径必须继续保持：
 
 ```text
 Experiment Contract
-  -> frozen Code/Data/Tex snapshot
-  -> ExecutionPlan
-  -> container-native execution
-  -> metrics/artifacts/logs
-  -> RunManifest
-  -> Evidence
-  -> Claim
+        ↓
+Frozen Code / Data / TeX Snapshot
+        ↓
+ExecutionPlan
+        ↓
+Container Native Runner
+        ↓
+Logs / Metrics / Artifacts
+        ↓
+RunManifest
+        ↓
+Evidence
+        ↓
+Claim
 ```
 
-No nested container is required.
+不引入 Docker-in-Docker。
 
-### Environment provenance
+具体工程设计见：
 
-A container-native run should record an environment fingerprint sufficient to identify the execution environment. Candidate fields include:
+`docs/container-native-runner-plan.md`
 
-- container image identity when available;
-- OS / architecture;
-- Python version;
-- CUDA version;
-- visible GPU model/device identifiers;
-- dependency or lock-file hash;
-- relevant runtime versions.
+## 4. 第二阶段：Codex 作为 DSH 原生 Harness
 
-The exact schema should be designed before implementation.
+第二阶段再处理 Codex。
 
-## 4. Phase 2: Codex as a DSH-native harness/provider
-
-Codex should be usable directly from DSH/Scholar conversations without creating a second independent tool world.
-
-Target ownership model:
+目标不是在 Scholar 内增加一套独立 Codex 工具体系，而是：
 
 ```text
 Codex reasoning / thread
-        |
-        v
-DSH tool calls
-        |
-        +-- filesystem
-        +-- shell
-        +-- web
-        +-- Scholar research tools
-        +-- skills/subagents
+          ↓
+      DSH Tool Calls
+          ↓
+  ┌───────┼─────────┐
+  │       │         │
+Files    Shell     Web
+                    │
+             Scholar Research Tools
 ```
 
-DSH remains authoritative for tool permission, execution, trajectory, and audit.
+DSH 继续负责：
 
-The preferred integration should therefore:
+- Tool catalog；
+- Tool permission；
+- Tool execution；
+- trajectory；
+- session / audit；
+- Scholar tools 的访问。
 
-- use the supported Codex app-server / official Codex integration path;
-- expose Codex as a normal selectable DSH provider/harness where possible;
-- route environment operations through DSH tools;
-- avoid relying on unofficial OAuth/subscription-access mechanisms;
-- avoid parallel Codex-owned and DSH-owned shell/filesystem execution paths.
+这样无论当前使用 DeepSeek、本地 vLLM 还是 Codex，科研工作流和工具面都保持一致。
 
-Codex integration is intentionally separated from Phase 1 so that the execution model can be stabilized first.
+Codex 集成不与第一阶段 Container Native Runner 混在同一个开发任务中。先稳定执行环境，再接入 Codex。
 
-## 5. Human-in-the-loop workflow
+## 5. Human-in-the-loop 工作方式
 
-The system is not intended to run an autonomous multi-agent research organization.
+本系统不是为了构建全自动多 Agent 科研组织。
 
-Expected usage:
+预期工作方式是：
 
 ```text
-Human + primary agent
-  -> discuss
-  -> settle design / plan
-  -> persist design artifact
-  -> human chooses executor/model
-  -> implementation / experiment / analysis
-  -> human reviews result
-  -> return to discussion
+人 + 当前主 Agent
+        ↓
+讨论问题
+        ↓
+确定设计 / 实验方案
+        ↓
+把决定固化成项目文档
+        ↓
+人选择执行模型 / Harness
+        ↓
+实现 / 实验 / 分析
+        ↓
+人检查结果
+        ↓
+回到讨论与下一轮设计
 ```
 
-Different agents may work on the same project, but coordination is primarily through the human and durable project artifacts rather than hidden agent-to-agent chat context.
+不同 Agent 可以在同一个 Project 上工作，但协调主要通过：
 
-## 6. Non-goals for the initial fork
+- 人的任务分配；
+- Git；
+- 设计文档；
+- Experiment Contract；
+- Run / Artifact；
+- Evidence / Claim；
+- Manuscript。
 
-Do not initially redesign:
+不依赖隐藏的 Agent-to-Agent 对话上下文作为科研事实来源。
 
-- the Scholar state machine;
-- Gate semantics;
-- Evidence/Claim semantics;
-- literature model;
-- experiment contracts;
-- release workflow;
-- multi-user support;
-- multi-workspace/project management;
-- autonomous agent delegation.
+## 6. 第一阶段不做的事情
 
-Do not add provider-specific backends for local vLLM or DeepSeek when normal DSH provider support is sufficient.
+当前 Fork 第一阶段不处理以下内容：
 
-## 7. Implementation order
+- 不重新设计 Scholar State Machine；
+- 不改变 Gate 语义；
+- 不改变 Evidence / Claim 语义；
+- 不重写 Literature / Corpus 模型；
+- 不改变 Experiment Contract；
+- 不重写 Release Workflow；
+- 不增加多用户能力；
+- 不增加多 Workspace / 多 Project 管理；
+- 不增加自动 Multi-Agent Orchestration；
+- 不为 DeepSeek 或本地 vLLM 编写 Scholar 专用 Provider；
+- 不在 Container Native Runner 开发中同时实现 Codex Provider。
 
-1. Lock the upstream/DSH compatibility baseline.
-2. Add schema and migration support for `container-native`.
-3. Add the container-native Runner/Profile/Target path.
-4. Preserve snapshots, metrics, artifacts, RunManifest and Evidence behavior.
-5. Add container-native `latex-compile`.
-6. Add UI/Settings support for the new execution target.
-7. Add focused tests and update acceptance documentation.
-8. Validate a real GPU experiment inside the current container.
-9. Integrate a DSH-native Codex provider/harness.
-10. Validate the complete human-in-the-loop workflow on one real research project.
+## 7. 实现顺序
 
-## 8. Upstream policy
+当前实现顺序固定为：
 
-Keep `main` suitable for tracking upstream.
+1. 固定 Upstream 与 DSH 兼容基线；
+2. 完成 `container-native` 的 schema 与 migration；
+3. 完成 RunnerTarget / RunnerProfile / readiness；
+4. 完成 Container Native execution adapter；
+5. 保持 Snapshot、Metrics、Artifact、RunManifest、Evidence 链不变；
+6. 支持 Container Native `latex-compile`；
+7. 补充 Settings / UI；
+8. 补充单元测试、安全测试和验收文档；
+9. 在真实 GPU Research Container 中完成一次正式实验验证；
+10. 再开始 Codex 的 DSH-native Harness/Provider 集成；
+11. 使用一个真实科研项目验证完整 Human-in-the-loop 工作流。
 
-Project-specific development should happen on `research-base` and feature branches derived from it.
+## 8. 版本与 Upstream 策略
 
-When syncing upstream, preserve the architectural decisions in this document rather than resolving semantic conflicts by reverting to nested Docker execution.
+`main` 用于尽可能保持与 upstream 的同步关系。
+
+我们的长期改动放在：
+
+```text
+research-base
+```
+
+以及从其派生的 feature branch 中。
+
+DSH Scholar 与 DSH 本身都仍处于快速迭代阶段，因此实际部署应固定：
+
+```text
+DSH exact version
++
+DSH Scholar exact commit
+```
+
+而不是持续追踪 latest。
+
+同步 upstream 时，应优先保留本文已经确定的架构决策。特别是正式实验运行在当前 Research Container 是本 Fork 的明确设计，不应在解决 merge conflict 时被无意恢复成必须嵌套 Docker。
