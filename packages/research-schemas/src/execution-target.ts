@@ -141,6 +141,8 @@ export const ExecutionPlan = z.object({
   target_kind: RunnerTargetKind,
   target_revision: z.number().int().positive(),
   target_config_hash: z.string().regex(PROFILE_CONFIG_HASH_RE, 'target_config_hash must be sha256:<64 hex>'),
+  expected_environment_hash: z.string().regex(PROFILE_CONFIG_HASH_RE).optional(),
+  native_gpu_uuids: z.array(z.string().regex(/^GPU-[a-fA-F0-9-]+$/)).optional(),
   lease: LeaseBinding,
   /** Kernel 提交 Job 时固定的 exact Project effective config pin（CONFIG-01）。 */
   config_pin: z.string().regex(PROFILE_CONFIG_HASH_RE, 'config_pin must be sha256:<64 hex>'),
@@ -307,6 +309,8 @@ export function buildExecutionPlan(job: JobRecord, options: BuildExecutionPlanOp
     target_kind: targetKind,
     target_revision: targetRevision,
     target_config_hash: targetConfigHash,
+    ...(payload?.expected_environment_hash === undefined ? {} : { expected_environment_hash: z.string().regex(PROFILE_CONFIG_HASH_RE).parse(payload.expected_environment_hash) }),
+    ...(payload?.native_gpu_uuids === undefined ? {} : { native_gpu_uuids: z.array(z.string().regex(/^GPU-[a-fA-F0-9-]+$/)).parse(payload.native_gpu_uuids) }),
     data_hash: typeof payload?.data_hash === 'string' ? payload.data_hash : '',
     code_commit: typeof payload?.code_commit === 'string' ? payload.code_commit : '',
     lease: {

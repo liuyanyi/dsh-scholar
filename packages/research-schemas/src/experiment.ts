@@ -6,6 +6,7 @@
 
 import { z } from 'zod'
 import { FrozenProtocolPin, ResearchIntent } from './methodology.js'
+import { ContainerNativeEnvironment } from './container-native.js'
 
 /** Pre-registered experiment contract; immutable once approved (ADR-004). */
 export const ExperimentContract = z.object({
@@ -48,6 +49,7 @@ export const ExperimentContract = z.object({
     gate_decision_id: z.string().optional(),
     approved_at: z.string().optional(),
     approved_by: z.string().optional(),
+    native_environment: z.object({ target_id: z.string(), sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict().optional(),
   }).optional(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -134,6 +136,8 @@ export const RunManifest = z.object({
   project_id: z.string().min(1),
   code_commit: z.string(),
   container_digest: z.string().default(''),
+  execution_environment: ContainerNativeEnvironment.optional(),
+  native_environment_artifact: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
   data_hash: z.string().default(''),
   command: z.array(z.string()).default([]),
   resources: z.object({

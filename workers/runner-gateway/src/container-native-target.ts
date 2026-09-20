@@ -16,6 +16,7 @@ export class ContainerNativeAdapter implements ExecutionTarget {
       || computeProfileConfigHash(profile) !== parsed.profile_config_hash
       || profile.capabilities.includes('gpu') !== (parsed.compute.mode === 'nvidia')
       || parsed.limits.cpus !== profile.limits.cpus || parsed.limits.memory_mb !== profile.limits.memory_mb || parsed.limits.pids !== profile.limits.pids
+      || (['baseline', 'pilot', 'formal', 'reproduce'].includes(parsed.kind) && parsed.expected_environment_hash === undefined)
       || parsed.network.policy !== profile.network_policy) throw new ExecutionTargetError('environment: native_plan_mismatch')
     this.fingerprint = executionPlanFingerprint(parsed)
     return { target_id: this.target_id, fingerprint: this.fingerprint }

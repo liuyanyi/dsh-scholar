@@ -15,13 +15,15 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ResearchClient } from '@dsh-scholar/research-client'
 import type { JobRecord } from '@dsh-scholar/research-schemas'
 import { buildExecutionPlan, computeProfileConfigHash, containerNativeFingerprintHash, getRunnerProfile, signExecutionPlan, type ExecutionPlan, type RunnerProfile } from '@dsh-scholar/research-schemas'
 import { prepareNativeIsolation, type NativeIsolation } from './container-native-isolation.js'
+import { nativeGpuLockedCommand } from './native-gpu-lock.js'
+import { nativeEnvironmentSnapshotContent, type NativeEnvironmentSnapshot } from '@dsh-scholar/research-schemas'
 import { LocalDockerAdapter, buildLocalDockerArgs, type DockerExecContext, type RunOutcome } from './execution-target.js'
 import { appendTerminalFramesWithLease } from './kernel-client.js'
 import {
@@ -958,6 +960,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
 
   let run: RunOutcome
   let executionEnvironment: ContainerNativeEnvironment | undefined
+  let nativeSnapshot: NativeEnvironmentSnapshot | undefined
   // §12.5 (P0): the in-container execution receives its run identity so the
   // metrics FILE it writes back can prove run/contract/seed provenance.
   const runEnv: Record<string, string> = {
@@ -1062,7 +1065,15 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
               resolveNativeExecutable(usesBiber ? 'biber' : 'bibtex', exec.cwd, env)
             }
           }
-          executionEnvironment = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest)
+          const observed = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest, process.env, undefined,
+            /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python')
+          const { runtime_snapshot, ...environment } = observed
+          nativeSnapshot = runtime_snapshot
+          executionEnvironment = environment
+          if (nativePlan.expected_environment_hash !== undefined && nativePlan.expected_environment_hash !== environment.fingerprint.actual_environment_hash) throw new Error('environment_changed')
+          const selectedGpuUuids = nativePlan.compute.mode === 'nvidia'
+            ? environment.fingerprint.gpu_devices.filter(d => nativePlan.compute.mode === 'nvidia' && (nativePlan.compute.devices === 'all' || nativePlan.compute.devices.includes(d.index))).map(d => d.uuid).sort() : []
+          if (nativePlan.compute.mode === 'nvidia' && JSON.stringify(selectedGpuUuids) !== JSON.stringify(nativePlan.native_gpu_uuids)) throw new Error('native_gpu_identity_changed')
           const pinFailure = await runnerTargetPinFailure(client, targetPayload, 'container-native', configuredTargetId)
           if (pinFailure !== null) throw new Error(`environment: ${pinFailure}`)
           isolation = await prepareNativeIsolation(nativePlan, exec.cwd, env)
@@ -1070,12 +1081,25 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
           executionEnvironment.fingerprint_hash = containerNativeFingerprintHash(executionEnvironment.fingerprint)
           const finalPinFailure = await runnerTargetPinFailure(client, targetPayload, 'container-native', configuredTargetId)
           if (finalPinFailure !== null) throw new Error(`environment: ${finalPinFailure}`)
-          const result = await spawnCaptured(isolation.wrap([executable, ...exec.command.slice(1)]), {
+          if (nativePlan.expected_environment_hash !== undefined && (nativePlan.network.policy === 'none' || isolation.resource_isolation === 'cgroup-v2')) {
+            const checked = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest, process.env, undefined,
+              /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python')
+            if (checked.fingerprint.actual_environment_hash !== nativePlan.expected_environment_hash) throw new Error('environment_changed')
+          }
+          const gpuReadyPath = join(exec.cwd, `.dsh-gpu-${randomUUID()}`)
+          const result = await spawnCaptured(nativeGpuLockedCommand(selectedGpuUuids, isolation.wrap([executable, ...exec.command.slice(1)]), nativePlan.limits.timeout_ms, gpuReadyPath), {
             cwd: exec.cwd, env, jobId: exec.jobId, signal: exec.signal, onChunk: exec.onChunk,
             timeoutMs: nativePlan.limits.timeout_ms, maxLogBytes: Math.min(maxLogBytes, nativePlan.limits.max_log_bytes),
             combinedLogLimit: true,
           })
           await isolation.cleanup()
+          if (selectedGpuUuids.length && result.exitCode === 75 && !existsSync(gpuReadyPath)) result.error = 'environment: native_gpu_busy'
+          rmSync(gpuReadyPath, { force: true })
+          if (nativePlan.expected_environment_hash !== undefined && result.exitCode === 0) {
+            const after = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest, process.env, undefined,
+              /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python')
+            if (after.fingerprint.actual_environment_hash !== nativePlan.expected_environment_hash) throw new Error('environment_changed_during_run')
+          }
           return { run_id: exec.runId, exit_code: result.exitCode, started_at: started, finished_at: new Date().toISOString(), stdout: result.stdout, stderr: result.stderr, error: result.error, signal: result.signal }
         } catch (error) {
           try { await isolation?.cleanup() } catch (cleanupError) {
@@ -1144,6 +1168,10 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
     })
 
     const environmentMetadata = executionEnvironment === undefined ? {} : { execution_environment_hash: executionEnvironment.fingerprint_hash }
+    if (nativeSnapshot !== undefined) {
+      const artifact = await client.registerArtifact({ project_id: job.project_id, kind: 'manifest', content_base64: Buffer.from(nativeEnvironmentSnapshotContent(nativeSnapshot)).toString('base64'), metadata: { run_id: run.run_id, ...environmentMetadata }, media_type: 'application/json', file_name: 'native-environment.json' })
+      manifest.native_environment_artifact = artifact.artifact_id
+    }
     const logContent = `=== dsh-scholar run ${run.run_id} (job ${job.job_id}, kind ${job.kind}) ===\nstarted: ${run.started_at}\nfinished: ${run.finished_at}\nexit: ${run.exit_code}\n\n--- stdout ---\n${run.stdout}\n\n--- stderr ---\n${run.stderr}\n${run.error !== undefined ? `\n--- error ---\n${run.error}\n` : ''}`
     const logArtifact = await client.registerArtifact({
       project_id: job.project_id,
@@ -1339,9 +1367,21 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
 }
 
 /** Keep a lease alive while a job runs (best effort; §12.6 fencing echoes the claim's generation/token). */
-export async function heartbeatLoop(jobId: string, owner: string, client: ResearchClient, intervalMs = 20000, signal: AbortSignal, leaseGeneration?: number | null, leaseToken?: string | null): Promise<void> {
+export async function heartbeatLoop(jobId: string, owner: string, client: ResearchClient, intervalMs = 20000, signal: AbortSignal, leaseGeneration?: number | null, leaseToken?: string | null, onLeaseLost?: () => void, initialExpiry?: string | null): Promise<void> {
+  if (signal.aborted) return
+  let expiry = initialExpiry ? Date.parse(initialExpiry) : Number.POSITIVE_INFINITY
+  let pending = false
   const timer = setInterval(() => {
-    void client.heartbeatJob(jobId, owner, leaseGeneration ?? null, leaseToken ?? null).catch(() => undefined)
+    if (pending || signal.aborted) return
+    pending = true
+    void client.heartbeatJob(jobId, owner, leaseGeneration ?? null, leaseToken ?? null).then(job => {
+      if (job.lease_expires_at) expiry = Date.parse(job.lease_expires_at)
+    }).catch(error => {
+      if (error?.status === 409 || error?.code === 'lease_stale') onLeaseLost?.()
+    }).finally(() => { pending = false })
   }, intervalMs)
-  signal.addEventListener('abort', () => clearInterval(timer), { once: true })
+  const watchdog = onLeaseLost ? setInterval(() => {
+    if (!Number.isFinite(expiry) || Date.now() >= expiry) onLeaseLost()
+  }, Math.min(intervalMs, 1000)) : undefined
+  signal.addEventListener('abort', () => { clearInterval(timer); if (watchdog) clearInterval(watchdog) }, { once: true })
 }

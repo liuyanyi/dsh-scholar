@@ -5,6 +5,7 @@
 - container-native：`tests/unit/container-native-runner.test.ts` 运行真实 CPU 子进程，覆盖 baseline/pilot/formal/reproduce、Metrics/签名、超时、取消、日志上限、秘密环境过滤、快照篡改、冻结输入、GPU 可见性与 TeX 路径限制。
 - container-native-kernel：`tests/unit/container-native-kernel.test.ts` 通过真实 SQLite/CAS/HTTP 完成签名 baseline 与冻结 TeX build，保留 Contract/Snapshot/isolated-subprocess 拒绝、profile 矩阵、health 与 GPU capability 检查；fixture TeX 编译后并发编辑仍判 stale。
 - container-native-migration：`tests/unit/migrations.test.ts` 的 0039 用旧 kind CHECK 表验证升级，全部旧行/旧 migration checksum 保持，新 builtin 幂等。
+- container-native-drift：`container-native-drift.test.ts`、`native-environment-admission.test.ts`、`native-gpu-lock.test.ts` 覆盖 installed version/RECORD 漂移、审批 pin、跨 Kernel GPU 排他、恢复/fencing、真实 flock 与挂起续租终止；独立 uv 真实升级用例显式 opt-in，见 [环境 Pin](container-native-drift-guard.md)。
 - container-native-isolation：`tests/unit/container-native-isolation.test.ts` 覆盖可选断网/资源/组合模式、控制器和文件系统检查、启动前加入 cgroup、配额写入、失败关闭与清理；Runner 测试验证缺少委派时实验代码不启动。
 - container-native-real：2026-09-20 独立 uv/PyTorch 环境真实 GPU 小规模计算与 approved baseline 签名链路通过，见 [验收记录](container-native-validation.md)。硬隔离成功路径、真实 TeX 和浏览器 Settings 仍按 [人工验收](manual-acceptance.md) 记录，不用 mocked NVIDIA 或 fixture engine 代替。
 

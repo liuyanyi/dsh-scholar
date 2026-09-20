@@ -18,6 +18,8 @@ pnpm runner --mode container-native --target-id target_container_native_v1 --ker
 
 Project 选择该 Target 后默认绑定 CPU/GPU native profile；可以通过原有 `execution.runner_profile_id` 设置切换。native profile 只能绑定 native Target；Docker profile 仍只绑定 local-docker/remote-ssh；isolated-subprocess 仍只能用于 local-process trusted smoke。
 
+正式实验现已要求 V2 实际环境观测与 Contract 审批 pin。先在选定 Python 环境中启动 Runner、取得认证 heartbeat，再审批新的 Contract；旧审批不自动补 pin。漂移保护、GPU UUID 租约、路径兼容审计及其限制见 [环境 Pin 与 GPU 租约](container-native-drift-guard.md)。
+
 ## 输入与输出
 
 baseline/pilot/formal/reproduce 保持 approved Contract、冻结代码/数据快照、image pin、Protocol（适用时）、预算和 Gate 校验。Runner 在全新临时目录物化 CAS 输入，校验代码 archive、文件和数据 hash，不从用户工作树读取正式输入。
@@ -53,6 +55,8 @@ baseline/pilot/formal/reproduce 保持 approved Contract、冻结代码/数据�
 GPU 启动前查询 `nvidia-smi`，验证当前可见设备与 typed selector；使用 `CUDA_VISIBLE_DEVICES` 限制实验可见设备，不使用 Docker `--gpus`，也不把该变量宣称为硬件隔离。无可用设备或指定设备不在父容器可见集合时，以 environment 类失败结束。
 
 每次实际执行前采集版本化 fingerprint：OS/架构、Node/Python、CUDA toolkit/驱动、GPU ID、冻结依赖锁 hash、compute，以及实际网络/资源隔离状态。未知版本或镜像身份记录 `null`；不采集完整 env、无关宿主路径或 secret。部署可通过 `DSH_RESEARCH_CONTAINER_IMAGE=repository@sha256:...` 提供当前容器镜像身份，这是部署声明，Runner 不通过 Docker 验证。
+
+V2 额外记录 `actual_environment_hash`，引用实际解释器及 installed distributions 的环境 Snapshot Artifact；与 `dependency_lock_hash` 区分。baseline/pilot/formal/reproduce 的 `expected_environment_hash` 来自审批时固定的环境。GPU Job 还固定 UUID 集合，认领时互斥，启动时加本机 flock 锁。
 
 `ExecutionPlan.image.digest` 保留为配置 pin。native Manifest 的 `container_digest=configured:<digest>`，不会声称运行过该 digest 的子容器；`execution_environment` 包含配置 pin、fingerprint 与确定性 SHA-256。字段纳入原有 Ed25519 签名，Kernel 校验 fingerprint hash、image pin、compute、隔离模式及实际硬资源 limits。资源模式记录 `resource_isolation=cgroup-v2` 和 `enforced_limits`，断网记录 `network_isolation=network-namespace`；旧默认 fingerprint 仍合法。Logs/Metrics/PDF 等 Artifact 沿用现有注册与 Manifest 引用，Evidence/Claim 完成校验不变。Settings heartbeat 展示的是父容器环境观测，本次实验的权威 fingerprint 在签名 Manifest 中。
 

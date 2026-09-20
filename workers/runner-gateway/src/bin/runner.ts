@@ -381,7 +381,9 @@ while (!stopping) {
       // the kernel and terminates the REAL execution when the job is cancelled.
       const heartbeatAc = new AbortController()
       const executeAc = new AbortController()
-      heartbeatLoop(job.job_id, owner, client, heartbeatMs, heartbeatAc.signal, job.lease_generation, job.lease_token)
+      heartbeatLoop(job.job_id, owner, client, heartbeatMs, heartbeatAc.signal, job.lease_generation, job.lease_token,
+        mode === 'container-native' ? () => { cancelRun(job.job_id); executeAc.abort(); heartbeatAc.abort() } : undefined,
+        job.lease_expires_at)
       const cancelWatcher = setInterval(() => {
         void client.getJob(job.job_id).then(current => {
           if (current.status === 'cancelled' && !executeAc.signal.aborted) {

@@ -1,15 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash, generateKeyPairSync, verify } from 'node:crypto'
 import { mkdtempSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ResearchClient } from '@dsh-scholar/research-client'
-import { buildExecutionPlan, ContainerNativeEnvironment, getRunnerProfile, RUNNER_PROFILE_IDS, type JobRecord } from '@dsh-scholar/research-schemas'
+import { buildExecutionPlan, ContainerNativeEnvironment, getRunnerProfile, RUNNER_PROFILE_IDS, RunManifest, type JobRecord } from '@dsh-scholar/research-schemas'
 import { cancelRun, canonicalJson, collectNativeEnvironment, ContainerNativeAdapter, executeJob, nativeEnvironment, buildLatexRunScript } from '@dsh-scholar/runner-gateway'
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
 const profile = getRunnerProfile(RUNNER_PROFILE_IDS.containerNativeCpu)!
 const dirs: string[] = []
+let expectedEnvironmentHash: string
+beforeAll(async () => { expectedEnvironmentHash = (await collectNativeEnvironment('/tmp', { mode: 'cpu' }, profile.image)).fingerprint.actual_environment_hash! })
 afterEach(() => { vi.unstubAllEnvs(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 function harness(script: string, kind: JobRecord['kind'] = 'formal') {
@@ -23,6 +25,7 @@ function harness(script: string, kind: JobRecord['kind'] = 'formal') {
       runner_target_hash: `sha256:${'1'.repeat(64)}`, runner_profile_id: profile.profile_id, profile_config_hash: profile.config_hash,
       project_config_pin: `sha256:${'2'.repeat(64)}`, image_digest: profile.image, runner_compute: { mode: 'cpu' },
       seed: 11, contract_metrics: ['accuracy'], output_contract: { metrics: '/outputs/metrics.json' }, data_artifact_ids: [],
+      expected_environment_hash: expectedEnvironmentHash,
     },
   } as unknown as JobRecord
   const artifacts: Array<{ kind: string; content: string }> = []
@@ -85,10 +88,12 @@ describe('container-native actual CPU execution', () => {
     const result = await h.run()
     expect(result.job.status, result.job.error).toBe('succeeded')
     expect(result.run.stdout).toContain('frozen-input')
-    expect(h.artifacts.map(a => a.kind)).toEqual(['log', 'analysis'])
+    expect(h.artifacts.map(a => a.kind)).toEqual(['manifest', 'log', 'analysis'])
     const manifest = result.job.run_manifest as Record<string, unknown>
     expect(manifest.container_digest).toBe(`configured:${profile.image}`)
     expect(ContainerNativeEnvironment.safeParse(manifest.execution_environment).success).toBe(true)
+    expect(RunManifest.parse(manifest).native_environment_artifact).toBe(manifest.native_environment_artifact)
+    expect(RunManifest.parse(manifest).execution_environment).toEqual(manifest.execution_environment)
     const { signature, ...signed } = manifest
     expect(verify(null, Buffer.from(canonicalJson(signed)), h.keys.publicKey, Buffer.from(signature as string, 'base64'))).toBe(true)
     expect(h.client.request).toHaveBeenCalled()
@@ -163,6 +168,14 @@ describe('container-native actual CPU execution', () => {
 })
 
 describe('native GPU and environment observations', () => {
+  it('blocks a drifted environment before executing frozen code', async () => {
+    const h = harness(metrics)
+    h.job.payload.expected_environment_hash = `sha256:${'f'.repeat(64)}`
+    const result = await h.run()
+    expect(result.job.failure_class).toBe('environment')
+    expect(result.run.error).toContain('environment_changed')
+    expect(result.run.stdout).toBe('')
+  })
   it('records unknown versions honestly and computes stable hashes without paths/secrets', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'native-env-')); dirs.push(dir)
     writeFileSync(join(dir, 'uv.lock'), 'locked')

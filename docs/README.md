@@ -2,6 +2,8 @@
 
 research-base 扩展：[当前科研容器 Runner](container-native-runner.md)（实现、部署、可选隔离），[GPU 与隔离验收](container-native-validation.md)（真实 GPU 结果、复现与待验收项）。
 
+环境可信度补强：[Native 环境 Pin 与 GPU 租约](container-native-drift-guard.md)，包含实际依赖 hash、审批绑定、漂移拒绝、GPU 排他及剩余边界。
+
 > 规范版本：2.5
 > 更新日期：2026-08-20
 > 目标成熟度：Security Alpha，默认 gate-only

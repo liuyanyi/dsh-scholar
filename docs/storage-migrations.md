@@ -8,6 +8,8 @@
 
 迁移以 `INSERT OR IGNORE` 创建默认禁用的 `target_container_native_v1`，不修改旧 local-process/local-docker/remote-ssh。迁移正文生成 SHA-256 写入原有 `schema_migrations.checksum`，旧 migration body/checksum 不变；重复打开数据库不重复插入。升级前沿用现有备份流程，不支持自动降级。测试覆盖真实旧 CHECK 表、全部旧字段、外键、旧 checksum、kind 约束及重复打开。
 
+环境 pin/GPU 租约补强不新增 migration：V2 observation 使用现有 JSON 列，审批环境写入 Contract body，expected hash/设备 UUID 写入 Job payload；排他认领复用 Job lease 事务。旧审批不回填 native 环境 pin，必须创建新 Contract 版本并重新审批，详见 [环境 Pin](container-native-drift-guard.md)。
+
 ## 1. 文件布局
 
 ~~~text

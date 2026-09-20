@@ -1,17 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ResearchKernel, startKernelServer, assessRunnerEnvironment } from '@dsh-scholar/research-kernel'
 import { ResearchClient } from '@dsh-scholar/research-client'
-import { executeJob, signManifest } from '@dsh-scholar/runner-gateway'
+import { collectNativeEnvironment, executeJob, signManifest } from '@dsh-scholar/runner-gateway'
 import { BUILTIN_RUNNER_TARGETS, containerNativeFingerprintHash, getRunnerProfile, RUNNER_PROFILE_IDS, RunnerTargetCreateInput, RunnerProfile, runnerTargetConfigHash } from '@dsh-scholar/research-schemas'
 
 const cleanup: Array<() => void | Promise<void>> = []
 afterEach(async () => { vi.unstubAllEnvs(); for (const fn of cleanup.splice(0).reverse()) await fn() })
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 const profile = getRunnerProfile(RUNNER_PROFILE_IDS.containerNativeCpu)!
+let observation: Awaited<ReturnType<typeof collectNativeEnvironment>>['fingerprint']
+beforeAll(async () => { observation = (await collectNativeEnvironment('/tmp', { mode: 'cpu' }, profile.image)).fingerprint })
 const brief = { problem: 'native', scope: 'test', questions: [], primary_metrics: ['accuracy'], resources: '', risks: [], target_outputs: ['paper'], target_venue: null, baseline_repo: null, domain: 'ml' }
 
 function setup(gpu = false) {
@@ -19,7 +21,7 @@ function setup(gpu = false) {
   const kernel = new ResearchKernel({ dbPath: join(root, 'kernel.db'), casRoot: join(root, 'cas'), requireSignedManifest: true })
   cleanup.push(() => { kernel.close(); rmSync(root, { recursive: true, force: true }) })
   const target = kernel.updateRunnerTarget('target_container_native_v1', { expected_revision: 1, enabled: true, ...(gpu ? { capabilities: ['linux', 'cpu', 'container-native', 'network-inherited', 'nvidia'], native_compute: { mode: 'nvidia' as const, devices: [process.env.DSH_TEST_GPU_DEVICE ?? '0'] } } : {}) })
-  kernel.observeRunnerTarget(target.target_id, { expected_revision: target.revision, health: 'online' })
+  kernel.observeRunnerTarget(target.target_id, { expected_revision: target.revision, health: 'online', native_observation: observation })
   const project = kernel.createProject({ name: 'native integration', workspace: root, brief, execution: { runner_target_id: target.target_id, runner_profile_id: gpu ? RUNNER_PROFILE_IDS.containerNativeGpu : profile.profile_id } })
   const keys = generateKeyPairSync('ed25519')
   kernel.registerRunnerKey({ key_id: 'native-test-key', public_key_pem: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString() })
@@ -79,6 +81,9 @@ describe('native Kernel to signed runner roundtrip', () => {
       const original = (input.run_manifest as any).execution_environment
       const fingerprint = { ...original.fingerprint, network_isolation: 'network-namespace' as const }
       await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, execution_environment: { ...original, fingerprint, fingerprint_hash: containerNativeFingerprintHash(fingerprint) } }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
+      const alteredFacts = { ...original.fingerprint, os: 'different-os' }
+      await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, execution_environment: { ...original, fingerprint: alteredFacts, fingerprint_hash: containerNativeFingerprintHash(alteredFacts) } }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
+      await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, native_environment_artifact: manifest.log_artifact }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
       return complete(input)
     })
     const result = await executeJob(claimed!, { client, owner: 'native-owner', targetId: target.target_id, mode: 'container-native', signingKey })

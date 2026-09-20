@@ -41,10 +41,12 @@ DSH_NATIVE_CGROUP_ROOT=/sys/fs/cgroup/<delegated-directory> DSH_TEST_NATIVE_ISOL
 
 沿用本次 container-native 基础实现的 `0039_container_native_targets`，schema version 36；保留旧 Target 行及历史 migration checksum，新增默认禁用的 native Target 与 compute/observation JSON 字段。可选隔离只增加固定 Profile 和可选 fingerprint 字段，不需要额外数据库 migration。默认两个 native Profile、既有 local-process/local-docker/remote-ssh 的配置 hash 和执行选择保持不变。
 
-## 最终自动验证
+## 基础实现验证（d15307e）
 
 - 全部模块与插件构建、UI typecheck、文档检查、`git diff --check` 通过。
 - 主单元回归含真实 GPU：161 个文件，1857 项通过，1 项真实硬隔离测试显式跳过。
 - `chat-agent-bridge.test.ts` 的权限语义测试另以非 root 用户执行，10 项通过；合计 1867 项通过。
 - Manifest 安全回归 11 项、Evidence 13 项、正式实验 Contract/Protocol/Snapshot 绑定 12 项全部通过。
 - 独立 uv 环境的 25 个依赖版本与已提交的 requirements 文件一致。
+
+后续环境 pin/GPU 租约增量及最新验证结果见 [环境 Pin 与 GPU 租约](container-native-drift-guard.md)。

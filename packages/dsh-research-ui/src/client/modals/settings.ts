@@ -717,6 +717,7 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
         const observation = target.native_observation
         if (observation !== undefined) meta.appendChild(el('div', '',
           `${observation.os}/${observation.arch} · Node ${observation.node_version} · ${observation.python_version ?? 'Python unknown'} · CUDA ${observation.cuda_version ?? 'unknown'} · GPU ${observation.gpu_devices.map(device => device.index).join(',') || 'none'} · ${observation.container_image_identity ?? 'image unknown'}`))
+        if (observation?.actual_environment_hash) meta.appendChild(el('div', 'mono', `${t('shell', 'shell.settings.targets.environmentHash')}: ${observation.actual_environment_hash}`))
         if (activeProject?.execution.runner_target_id === target.target_id) meta.appendChild(el('div', 'mono', activeProject.execution.runner_profile_id ?? ''))
       }
       if (target.connection !== undefined) {

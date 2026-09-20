@@ -3,7 +3,7 @@ import { constants, accessSync, existsSync, readFileSync, statSync } from 'node:
 import { createHash } from 'node:crypto'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
-import { ContainerNativeFingerprint, containerNativeFingerprintHash, type ContainerNativeEnvironment, type DockerCompute } from '@dsh-scholar/research-schemas'
+import { ContainerNativeFingerprint, containerNativeFingerprintHash, NativeEnvironmentSnapshot, nativeEnvironmentSnapshotHash, type ContainerNativeEnvironment, type DockerCompute } from '@dsh-scholar/research-schemas'
 
 const exec = promisify(execFile)
 const inheritedKeys = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'VIRTUAL_ENV', 'CONDA_PREFIX', 'LD_LIBRARY_PATH', 'CUDA_HOME', 'CUDA_PATH', 'NVIDIA_VISIBLE_DEVICES', 'NVIDIA_DRIVER_CAPABILITIES'] as const
@@ -30,12 +30,24 @@ export function resolveNativeExecutable(command: string, cwd: string, env: NodeJ
 
 export type NativeProbe = (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string | null>
 const probe: NativeProbe = async (command, args, env) => {
-  try { return (await exec(command, args, { env, timeout: 5000, maxBuffer: 64 * 1024 })).stdout.trim() } catch { return null }
+  try { return (await exec(command, args, { env, timeout: 10000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim() } catch { return null }
 }
 
-export async function collectNativeEnvironment(cwd: string, compute: DockerCompute, image: string, source: NodeJS.ProcessEnv = process.env, runProbe: NativeProbe = probe): Promise<ContainerNativeEnvironment> {
+const pythonInventory = `import hashlib, importlib.metadata as m, json, re, sys
+def h(b): return 'sha256:' + hashlib.sha256(b).hexdigest()
+rows = []
+for d in m.distributions():
+    record = d.read_text('RECORD')
+    rows.append({'name': re.sub(r'[-_.]+', '-', d.metadata['Name']).lower(), 'version': d.version, 'record_hash': h(record.encode()) if record else None})
+rows.sort(key=lambda r: (r['name'], r['version'], r['record_hash'] or ''))
+with open(sys.executable, 'rb') as f: executable = h(f.read())
+print(json.dumps({'version': sys.version.split()[0], 'executable_hash': executable, 'prefix_hash': h(sys.prefix.encode()), 'distributions': rows}))`
+
+export async function collectNativeEnvironment(cwd: string, compute: DockerCompute, image: string, source: NodeJS.ProcessEnv = process.env, runProbe: NativeProbe = probe, pythonCommand = 'python'): Promise<ContainerNativeEnvironment & { runtime_snapshot: NativeEnvironmentSnapshot }> {
   const env = nativeEnvironment(cwd, compute, source)
-  const python = await runProbe('python', ['--version'], env)
+  const python = await runProbe(pythonCommand, ['--version'], env)
+  const inventory = await runProbe(pythonCommand, ['-I', '-c', pythonInventory], env)
+  if (python !== null && inventory === null) throw new Error('environment: native_python_inventory_unavailable')
   const cuda = await runProbe('nvcc', ['--version'], env)
   const nvidia = await runProbe('nvidia-smi', ['--query-gpu=index,uuid,driver_version', '--format=csv,noheader,nounits'], env)
   const devices: Array<{ index: string; uuid: string }> = []
@@ -58,9 +70,18 @@ export async function collectNativeEnvironment(cwd: string, compute: DockerCompu
     if (existsSync(join(cwd, name))) locks[name] = createHash('sha256').update(readFileSync(join(cwd, name))).digest('hex')
   }
   const identity = source.DSH_RESEARCH_CONTAINER_IMAGE
+  const runtime_snapshot = NativeEnvironmentSnapshot.parse({
+    schema_version: 1, os: process.platform, arch: process.arch,
+    node: { version: process.version, executable_hash: `sha256:${createHash('sha256').update(readFileSync(process.execPath)).digest('hex')}` },
+    python: inventory === null ? null : JSON.parse(inventory),
+    cuda_version: cuda?.match(/release (\d+\.\d+)/)?.[1] ?? null,
+    driver_version: drivers.size ? [...drivers].sort().join(',') : null,
+    gpu_uuids: available.map(d => d.uuid).sort(),
+  })
   const fingerprint = ContainerNativeFingerprint.parse({
-    schema_version: 1, execution_kind: 'container-native', os: process.platform, arch: process.arch, node_version: process.version,
-    python_version: python?.match(/^Python \d+\.\d+\.\d+(?:[a-z0-9.+-]*)?$/)?.[0] ?? null,
+    schema_version: 2, execution_kind: 'container-native', os: process.platform, arch: process.arch, node_version: process.version,
+    actual_environment_hash: nativeEnvironmentSnapshotHash(runtime_snapshot),
+    python_version: runtime_snapshot.python === null ? null : `Python ${runtime_snapshot.python.version}`,
     cuda_version: cuda?.match(/release (\d+\.\d+)/)?.[1] ?? null,
     nvidia_driver_version: drivers.size ? [...drivers].sort().join(',') : null,
     gpu_devices: available,
@@ -68,5 +89,5 @@ export async function collectNativeEnvironment(cwd: string, compute: DockerCompu
     container_image_identity: identity !== undefined && /^[^\s@]+@sha256:[a-f0-9]{64}$/.test(identity) ? identity : null,
     network_isolation: 'not-enforced', resource_isolation: 'parent-container', compute,
   })
-  return { kind: 'container-native', configured_image_pin: image, fingerprint, fingerprint_hash: containerNativeFingerprintHash(fingerprint) }
+  return { kind: 'container-native', configured_image_pin: image, fingerprint, fingerprint_hash: containerNativeFingerprintHash(fingerprint), runtime_snapshot }
 }
