@@ -53,7 +53,7 @@ export async function renderGates(body: HTMLElement, projectId: string, projecti
   searchInput.placeholder = t('overview', 'overview.gatesFilterPlaceholder')
   searchInput.setAttribute('aria-label', t('overview', 'overview.gatesFilterPlaceholder'))
   searchInput.value = gatesQuery
-  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 system-ui,sans-serif;outline:none;margin:2px 0 6px'
+  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 var(--font-sans);outline:none;margin:2px 0 6px'
   searchInput.onfocus = () => { searchInput.style.borderColor = 'var(--accent)' }
   searchInput.onblur = () => { searchInput.style.borderColor = 'var(--border)' }
   body.appendChild(searchInput)
@@ -211,7 +211,7 @@ export async function renderGates(body: HTMLElement, projectId: string, projecti
     reasonInput.setAttribute('aria-label', t('overview', 'overview.gatesReasonPlaceholder'))
     reasonInput.oninput = () => { gateDrafts.update(projectId, gate.gate_id ?? '', { reason: reasonInput.value }) }
     reasonInput.maxLength = 200
-    reasonInput.style.cssText = 'flex:1;min-width:0;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 system-ui,sans-serif;outline:none'
+    reasonInput.style.cssText = 'flex:1;min-width:0;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 var(--font-sans);outline:none'
     reasonInput.onfocus = () => { reasonInput.style.borderColor = 'var(--accent)' }
     reasonInput.onblur = () => { reasonInput.style.borderColor = 'var(--border)' }
     reasonRow.appendChild(reasonInput)

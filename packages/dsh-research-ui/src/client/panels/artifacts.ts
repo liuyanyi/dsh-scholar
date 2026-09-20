@@ -102,7 +102,7 @@ export async function renderArtifacts(body: HTMLElement, projectId: string): Pro
   searchInput.placeholder = t('artifacts', 'artifacts.filterPlaceholder')
   searchInput.setAttribute('aria-label', t('artifacts', 'artifacts.filterPlaceholder'))
   searchInput.value = artifactsQuery
-  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 system-ui,sans-serif;outline:none;margin:2px 0 4px'
+  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 var(--font-sans);outline:none;margin:2px 0 4px'
   searchInput.onfocus = () => { searchInput.style.borderColor = 'var(--accent)' }
   searchInput.onblur = () => { searchInput.style.borderColor = 'var(--border)' }
   body.appendChild(searchInput)

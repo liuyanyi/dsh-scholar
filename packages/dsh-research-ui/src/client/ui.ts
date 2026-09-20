@@ -196,7 +196,7 @@ export function openContextMenu(root: ShadowRoot, x: number, y: number, items: C
   const menu = el('div')
   menu.setAttribute('role', 'menu')
   menu.setAttribute('aria-label', t('common', 'common.contextMenuAria'))
-  menu.style.cssText = 'position:fixed;min-width:200px;background:var(--bg-2);border:1px solid var(--border-strong);border-radius:10px;padding:4px;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:10002;font:12px/1.4 system-ui,sans-serif;color:var(--text)'
+  menu.style.cssText = 'position:fixed;min-width:200px;background:var(--bg-2);border:1px solid var(--border-strong);border-radius:10px;padding:4px;box-shadow:0 12px 40px rgba(0,0,0,.35);z-index:10002;font:12px/1.4 var(--font-sans);color:var(--text)'
   const menuButtons: HTMLButtonElement[] = []
   for (const it of items) {
     if (it.divider === true) {
@@ -293,7 +293,7 @@ export function showToast(root: ShadowRoot | null, text: string): void {
   toast.setAttribute('role', 'status')
   toast.setAttribute('aria-live', 'polite')
   // dsh-web toast: click to dismiss it early.
-  toast.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10001;background:var(--bg-2);border:1px solid var(--border-strong);color:var(--text);border-radius:99px;padding:6px 16px;font:600 11.5px/1.4 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.3);cursor:pointer;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
+  toast.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10001;background:var(--bg-2);border:1px solid var(--border-strong);color:var(--text);border-radius:99px;padding:6px 16px;font:600 11.5px/1.4 var(--font-sans);box-shadow:0 8px 30px rgba(0,0,0,.3);cursor:pointer;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
   toast.onclick = () => toast.remove()
   root.appendChild(toast)
   setTimeout(() => toast.remove(), 2400)

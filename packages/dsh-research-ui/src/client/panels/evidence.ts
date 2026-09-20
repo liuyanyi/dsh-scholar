@@ -21,7 +21,7 @@ export async function renderEvidence(body: HTMLElement, projectId: string): Prom
   searchInput.placeholder = t('evidence', 'evidence.filterPlaceholder')
   searchInput.setAttribute('aria-label', searchInput.placeholder)
   searchInput.value = evidenceQuery
-  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 system-ui,sans-serif;outline:none;margin:2px 0 6px'
+  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 var(--font-sans);outline:none;margin:2px 0 6px'
   searchInput.onfocus = () => { searchInput.style.borderColor = 'var(--accent)' }
   searchInput.onblur = () => { searchInput.style.borderColor = 'var(--border)' }
   body.appendChild(searchInput)

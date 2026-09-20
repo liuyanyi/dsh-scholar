@@ -360,9 +360,11 @@ type ScholarViewProps = ConvViewProps
   & PropsLocale<typeof LOCALE_NAMESPACE>
   & InjectFace<ScholarViewFace>
 
+const UI_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", "Source Han Sans CN", "Helvetica Neue", Arial, sans-serif'
+
 const style = {
   card: {
-    listStyle: 'none', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12,
+    listStyle: 'none', fontFamily: UI_FONT_FAMILY, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12,
     background: 'var(--dsw-alias-bg-layer-3)', overflow: 'hidden',
   },
   header: {
@@ -393,11 +395,11 @@ const style = {
     borderRadius: 999, padding: '1px 8px', fontSize: 11,
     background: 'var(--dsw-alias-bg-module-platform)', color: 'var(--dsw-alias-label-secondary)',
   },
-  reset: { border: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
+  reset: { border: 0, background: 'none', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer', fontFamily: UI_FONT_FAMILY },
   actions: { display: 'flex', flexWrap: 'wrap', gap: 8, padding: '10px 0' },
   secondary: {
     border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, padding: '6px 12px', cursor: 'pointer',
-    background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)',
+    background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)', fontFamily: UI_FONT_FAMILY,
   },
   status: { margin: 0, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
   footer: {
@@ -407,9 +409,9 @@ const style = {
   error: { flex: 1, margin: 0, fontSize: 12, color: 'var(--dsw-alias-label-error)' },
   save: {
     border: 0, borderRadius: 8, padding: '6px 14px', cursor: 'pointer',
-    background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)',
+    background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)', fontFamily: UI_FONT_FAMILY,
   },
-  view: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-layer-1)', overflow: 'hidden' },
+  view: { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--dsw-alias-bg-layer-1)', overflow: 'hidden', fontFamily: UI_FONT_FAMILY },
   viewHeader: {
     display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
     borderBottom: '1px solid var(--dsw-alias-border-l2)',
@@ -435,7 +437,7 @@ const style = {
   choiceCard: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12, background: 'var(--dsw-alias-bg-layer-3)', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 },
   choiceTitle: { margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
   input: { width: '100%', boxSizing: 'border-box', height: 38, padding: '0 10px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
-  primary: { alignSelf: 'flex-start', border: 0, borderRadius: 8, padding: '8px 14px', cursor: 'pointer', background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)' },
+  primary: { alignSelf: 'flex-start', border: 0, borderRadius: 8, padding: '8px 14px', cursor: 'pointer', background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)', fontFamily: UI_FONT_FAMILY },
   summaryGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 },
   summaryItem: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 10, padding: 10, background: 'var(--dsw-alias-bg-layer-2)' },
   unavailable: { margin: 0, color: 'var(--dsw-alias-label-error)', lineHeight: 1.5 },

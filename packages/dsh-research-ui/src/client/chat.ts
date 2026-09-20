@@ -1169,7 +1169,7 @@ export async function renderChat(
   searchInput.type = 'text'
   searchInput.placeholder = t('shell', 'shell.chat.searchPlaceholder')
   searchInput.value = state.chatSearchQuery
-  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 system-ui,sans-serif;outline:none'
+  searchInput.style.cssText = 'flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:11px/1.4 var(--font-sans);outline:none'
   searchInput.onfocus = () => { searchInput.style.borderColor = 'var(--accent)' }
   searchInput.onblur = () => { searchInput.style.borderColor = 'var(--border)' }
   searchInput.oninput = () => { state.chatSearchQuery = searchInput.value; chatSessionsPersist(); state.rerender() }
@@ -2456,7 +2456,7 @@ export function formatChatText(text: string, highlight?: string): HTMLElement[] 
     }
     if (/^#{1,3}\s/.test(line)) {
       const h = el('div')
-      h.style.cssText = `font:700 ${line.startsWith('###') ? 11.5 : 12.5}px/1.4 system-ui,sans-serif;color:var(--text);margin:6px 0 3px`
+      h.style.cssText = `font:700 ${line.startsWith('###') ? 11.5 : 12.5}px/1.4 var(--font-sans);color:var(--text);margin:6px 0 3px`
       h.append(...inlineChatText(line.replace(/^#{1,3}\s+/, ''), highlight))
       nodes.push(h)
       continue

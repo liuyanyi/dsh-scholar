@@ -293,7 +293,7 @@ function paintDetail(panel: HTMLElement, st: TopologyPanelState, projectId: stri
   head.style.cssText = 'align-items:center;gap:8px;margin-bottom:6px'
   head.appendChild(el('span', 'artifact-kind', view.node.kindText))
   const label = el('span', 'pname', view.node.label)
-  label.style.cssText = 'font:700 12.5px/1.3 system-ui,sans-serif;color:var(--text)'
+  label.style.cssText = 'font:700 12.5px/1.3 var(--font-sans);color:var(--text)'
   head.appendChild(label)
   head.appendChild(el('span', 'grow'))
   head.appendChild(stateTag(view.node.stateText))

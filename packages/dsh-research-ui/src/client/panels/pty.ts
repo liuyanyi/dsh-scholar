@@ -416,7 +416,7 @@ function paintOpenForm(body: HTMLElement, st: PtyPanelState, projection: Project
   labelInput.maxLength = 96
   labelInput.value = st.form.label
   labelInput.placeholder = t('pty', 'pty.form.labelPlaceholder')
-  labelInput.style.cssText = 'flex:1;min-width:200px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 8px;font:11px/1.4 system-ui,sans-serif;outline:none'
+  labelInput.style.cssText = 'flex:1;min-width:200px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 8px;font:11px/1.4 var(--font-sans);outline:none'
   labelInput.oninput = () => { st.form.label = labelInput.value }
   labelRow.append(labelText, labelInput)
   card.appendChild(labelRow)
@@ -492,7 +492,7 @@ function paintOpenForm(body: HTMLElement, st: PtyPanelState, projection: Project
   cwdInput.type = 'text'
   cwdInput.value = st.form.cwd
   cwdInput.placeholder = t('pty', 'pty.form.cwdPlaceholder')
-  cwdInput.style.cssText = 'flex:1;min-width:200px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 8px;font:11px/1.4 system-ui,sans-serif;outline:none'
+  cwdInput.style.cssText = 'flex:1;min-width:200px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 8px;font:11px/1.4 var(--font-sans);outline:none'
   cwdInput.oninput = () => { st.form.cwd = cwdInput.value }
   cwdRow.append(cwdLabel, cwdInput)
   card.appendChild(cwdRow)

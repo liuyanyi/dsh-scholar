@@ -460,7 +460,7 @@ export function chatSessionRename(id: string): void {
   const input = document.createElement('input')
   input.type = 'text'
   input.value = session.name
-  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:12px/1.4 system-ui,sans-serif;outline:none'
+  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:12px/1.4 var(--font-sans);outline:none'
   input.onfocus = () => { input.style.borderColor = 'var(--accent)' }
   input.onblur = () => { input.style.borderColor = 'var(--border)' }
   modal.appendChild(input)

@@ -120,7 +120,7 @@ export function openCommandsModal(root: ShadowRoot | null | undefined): void {
   input.type = 'text'
   input.placeholder = t('shell', 'shell.commands.filterPlaceholder')
   input.value = paletteQuery
-  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:12px/1.4 system-ui,sans-serif;outline:none;margin-bottom:10px'
+  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:12px/1.4 var(--font-sans);outline:none;margin-bottom:10px'
   input.onfocus = () => { input.style.borderColor = 'var(--accent)' }
   input.onblur = () => { input.style.borderColor = 'var(--border)' }
   modal.appendChild(input)

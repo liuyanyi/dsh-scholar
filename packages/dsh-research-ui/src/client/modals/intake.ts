@@ -360,7 +360,7 @@ function fieldInput(ctx: WizardCtx, placeholder: string, value: string, onChange
   input.type = 'text'
   input.placeholder = placeholder
   input.value = value
-  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 11px;font:12px/1.4 system-ui,sans-serif;outline:none;margin-bottom:6px'
+  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 11px;font:12px/1.4 var(--font-sans);outline:none;margin-bottom:6px'
   input.onfocus = () => { input.style.borderColor = 'var(--accent)' }
   input.onblur = () => { input.style.borderColor = 'var(--border)' }
   input.oninput = () => { onChange(input.value) }
@@ -405,7 +405,7 @@ function renderStage(ctx: WizardCtx): void {
   uploadRow.style.cssText = 'margin-top:12px;gap:8px'
   const fileInput = document.createElement('input')
   fileInput.type = 'file'
-  fileInput.style.cssText = 'flex:1;min-width:0;font:11px/1.4 system-ui,sans-serif'
+  fileInput.style.cssText = 'flex:1;min-width:0;font:11px/1.4 var(--font-sans)'
   const uploadBtn = el('button', 'btn primary', t('intake', 'intake.stage.fileCta'))
   uploadBtn.style.cssText = 'flex-shrink:0'
   uploadBtn.onclick = async () => {
@@ -576,7 +576,7 @@ function renderQuestion(ctx: WizardCtx, question: GrillAnswerViewLite, drafts: R
   input.rows = 2
   input.placeholder = t('intake', 'intake.grill.answer')
   input.value = typeof question.answer === 'string' ? question.answer : (drafts[code] ?? '')
-  input.style.cssText = 'width:100%;box-sizing:border-box;margin-top:6px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:12px/1.4 system-ui,sans-serif;outline:none;resize:vertical'
+  input.style.cssText = 'width:100%;box-sizing:border-box;margin-top:6px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:12px/1.4 var(--font-sans);outline:none;resize:vertical'
   input.oninput = () => { drafts[code] = input.value; if (ctx.intakeId !== null) grillDrafts.set(ctx.intakeId, { ...drafts }) }
   card.appendChild(input)
   if (intakeQuestionState(question) === 'answered') {

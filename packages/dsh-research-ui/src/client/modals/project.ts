@@ -35,7 +35,7 @@ export function openNewProjectModal(root: ShadowRoot | null | undefined, initial
     input.type = 'text'
     input.placeholder = placeholder
     input.value = value
-    input.style.cssText = 'width:100%;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font:12px/1.4 system-ui,sans-serif;outline:none'
+    input.style.cssText = 'width:100%;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font:12px/1.4 var(--font-sans);outline:none'
     input.onfocus = () => { input.style.borderColor = 'var(--accent)' }
     input.onblur = () => { input.style.borderColor = 'var(--border)' }
     modal.appendChild(lab)
@@ -125,7 +125,7 @@ export function openRenameModal(root: ShadowRoot, projectId: string, currentName
   const input = document.createElement('input')
   input.type = 'text'
   input.value = currentName
-  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:12px/1.4 system-ui,sans-serif;outline:none'
+  input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 11px;font:12px/1.4 var(--font-sans);outline:none'
   input.onfocus = () => { input.style.borderColor = 'var(--accent)' }
   input.onblur = () => { input.style.borderColor = 'var(--border)' }
   modal.appendChild(input)

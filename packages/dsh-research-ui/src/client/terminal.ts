@@ -345,7 +345,7 @@ export function renderTerminal(body: HTMLElement, p: Projection, projectId: stri
   searchInput.type = 'text'
   searchInput.placeholder = t('terminal', 'terminal.filterPlaceholder')
   searchInput.value = state.terminalSearch
-  searchInput.style.cssText = 'flex:1;min-width:140px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:4px 8px;font:11px/1.4 system-ui,sans-serif;outline:none'
+  searchInput.style.cssText = 'flex:1;min-width:140px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:4px 8px;font:11px/1.4 var(--font-sans);outline:none'
   searchInput.oninput = () => { state.terminalSearch = searchInput.value; state.rerender() }
   toolbar.appendChild(searchInput)
 
