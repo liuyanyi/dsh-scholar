@@ -2,6 +2,12 @@
 
 > 规范性文档。任何新增需求或修复建议必须在这里增加可自动化或可重复人工执行的验收场景。
 
+- container-native：`tests/unit/container-native-runner.test.ts` 运行真实 CPU 子进程，覆盖 baseline/pilot/formal/reproduce、Metrics/签名、超时、取消、日志上限、秘密环境过滤、快照篡改、冻结输入、GPU 可见性与 TeX 路径限制。
+- container-native-kernel：`tests/unit/container-native-kernel.test.ts` 通过真实 SQLite/CAS/HTTP 完成签名 baseline 与冻结 TeX build，保留 Contract/Snapshot/isolated-subprocess 拒绝、profile 矩阵、health 与 GPU capability 检查；fixture TeX 编译后并发编辑仍判 stale。
+- container-native-migration：`tests/unit/migrations.test.ts` 的 0039 用旧 kind CHECK 表验证升级，全部旧行/旧 migration checksum 保持，新 builtin 幂等。
+- container-native-isolation：`tests/unit/container-native-isolation.test.ts` 覆盖可选断网/资源/组合模式、控制器和文件系统检查、启动前加入 cgroup、配额写入、失败关闭与清理；Runner 测试验证缺少委派时实验代码不启动。
+- container-native-real：2026-09-20 独立 uv/PyTorch 环境真实 GPU 小规模计算与 approved baseline 签名链路通过，见 [验收记录](container-native-validation.md)。硬隔离成功路径、真实 TeX 和浏览器 Settings 仍按 [人工验收](manual-acceptance.md) 记录，不用 mocked NVIDIA 或 fixture engine 代替。
+
 - ui-brand-dsh-scholar：主 Header、Sidebar、Standalone 解锁页、浏览器 title、Chat 欢迎语/导出和 Settings 卡片均显示 `dsh Scholar`，可见 UI 不含旧组合品牌 `dsh Research`/`DSH Research`；`Research Kernel` 与 API 路径不受影响；中英文 locale parity 和 standalone 首屏副本校验通过。
 - readme-current-product-shot：`README.md` 的产品首图引用 `docs/assets/dsh-scholar-home-zh.png`，并展示当前 DSH 会话内的 `dsh Scholar` 页签、中文 Scholar 首页和 `Open in new page` 入口；界面发生可见变化时同步替换该图片，不能只保留旧截图。
 

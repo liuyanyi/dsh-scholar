@@ -18,7 +18,7 @@ export interface SshSecretRefView {
 
 export interface RemoteSshTargetView {
   target_id: string
-  kind: 'local-process' | 'local-docker' | 'remote-ssh'
+  kind: 'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'
   enabled: boolean
   draining: boolean
   service_identity?: SshSecretRefView

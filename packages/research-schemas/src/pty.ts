@@ -163,7 +163,7 @@ export const PtyContext = z.object({
   parent_session_id: PtyContextId.nullable(),
   runner_profile_id: z.string().min(1),
   runner_target_id: z.string().min(1),
-  target_kind: z.enum(['local-process', 'local-docker', 'remote-ssh']),
+  target_kind: z.enum(['local-process', 'local-docker', 'container-native', 'remote-ssh']),
 }).strict()
 export type PtyContext = z.infer<typeof PtyContext>
 

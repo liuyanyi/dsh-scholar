@@ -66,7 +66,7 @@ export type ExecutionLimits = z.infer<typeof ExecutionLimits>
  * target 也不得改用其它网络）。
  */
 export const ExecutionNetwork = z.object({
-  policy: z.literal('none'),
+  policy: z.enum(['none', 'inherited']),
 }).strict()
 export type ExecutionNetwork = z.infer<typeof ExecutionNetwork>
 

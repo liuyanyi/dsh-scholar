@@ -148,7 +148,7 @@ export interface ArtifactRow {
 export interface GateRow { gate_id?: string; type?: string; title?: string; status?: string; summary?: string }
 export interface ProjectRow { project_id?: string; name?: string; status?: string; revision?: number; updated_at?: string }
 
-export type RunnerTargetKindLite = 'local-process' | 'local-docker' | 'remote-ssh'
+export type RunnerTargetKindLite = 'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'
 export type RunnerTargetComputeLite =
   | { mode: 'cpu' }
   | { mode: 'nvidia'; devices: 'all' | string[] }
@@ -197,6 +197,13 @@ export interface RunnerTargetSafeViewLite {
   draining: boolean
   capabilities: string[]
   runtime?: RunnerTargetRuntimeLite
+  native_compute?: RunnerTargetComputeLite
+  native_observation?: {
+    os: string; arch: string; node_version: string; python_version: string | null;
+    cuda_version: string | null; network_isolation: string;
+    gpu_devices: Array<{ index: string; uuid: string }>;
+    container_image_identity: string | null;
+  }
   service_identity?: SecretRefViewLite
   connection?: { endpoint: SecretRefViewLite; credential: SecretRefViewLite; known_hosts: SecretRefViewLite }
   health: 'unknown' | 'online' | 'offline'

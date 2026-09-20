@@ -88,3 +88,12 @@ describe('runner target Settings SecretRef model', () => {
     })).toEqual({ kind: 'runner-target', action: 'update', target_id: 'gpu', patch: { expected_revision: 2, draining: true } })
   })
 })
+describe('native target Settings compute', () => {
+  it('emits typed native compute without Docker image metadata', () => {
+    expect(runnerTargetRuntimePayload('container-native', { imageDigest: '', computeMode: 'cpu', devices: 'all' }))
+      .toEqual({ ok: true, runtime: undefined, native_compute: { mode: 'cpu' } })
+    expect(runnerTargetRuntimePayload('container-native', { imageDigest: '', computeMode: 'nvidia', devices: '0, 2' }))
+      .toEqual({ ok: true, runtime: undefined, native_compute: { mode: 'nvidia', devices: ['0', '2'] } })
+    expect(runnerTargetRuntimePayload('container-native', { imageDigest: '', computeMode: 'nvidia', devices: '--gpus=all' }).ok).toBe(false)
+  })
+})

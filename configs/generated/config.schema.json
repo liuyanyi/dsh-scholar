@@ -309,7 +309,8 @@
             "mode": {
               "enum": [
                 "subprocess",
-                "docker"
+                "docker",
+                "container-native"
               ],
               "type": "string",
               "description": "Execution mode; formal kinds are container-only (runtime enforced, execution-runtime.md §1).",

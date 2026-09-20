@@ -27,9 +27,13 @@ DSH Scholar 是面向纯计算研究的 AI 科研工作台。它把项目对话�
 - 发送给视觉模型的图片只是当前轮次中不可信的 Chat 上下文，不会自动成为 OCR 结果、Brief 答案、Evidence、Claim、Gate 决策，也不能证明命令已经运行。
 - 产品聚焦机器学习、数据科学、生物信息学等纯计算研究，不适用于临床决策、人体试验、湿实验或其他高风险研究。
 
+## research-base：当前科研容器
+
+新增正式 `container-native` Runner，在当前科研容器运行冻结实验与 TeX，不依赖嵌套 Docker。原 `local-process` 仍限可信开发/冒烟，Docker/SSH 路径保留。部署、网络/资源能力差异和 GPU 待验收说明见 [当前科研容器 Runner](docs/container-native-runner.md)。
+
 ## 快速开始
 
-本地工作台需要 Linux、Node.js 24、pnpm 11.20.0；受控实验、TeX 编译和 clean-room 复现需要 Docker Engine。
+本地工作台需要 Linux、Node.js 24、pnpm 11.20.0。受控实验和 TeX 可使用 Docker Engine，或 research-base 的 [当前科研容器 Runner](docs/container-native-runner.md)；现有 clean-room 复现仍需要 Docker Engine。
 
 ### 1. 安装与构建
 

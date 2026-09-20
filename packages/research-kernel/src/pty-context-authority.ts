@@ -47,7 +47,7 @@ export function researchPtyContextId(projectId: string, principalId: string): st
 }
 
 function adapterIdForTarget(kind: RunnerTargetDescriptor['kind']): string {
-  if (kind === 'local-process') return 'local-pty'
+  if (kind === 'local-process' || kind === 'container-native') return 'local-pty'
   if (kind === 'local-docker') return 'local-docker'
   return 'remote-runner'
 }

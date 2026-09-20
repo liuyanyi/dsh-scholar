@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import {
   BUILTIN_RUNNER_TARGETS,
   RunnerTargetDescriptor,
+  ContainerNativeFingerprint,
   runnerTargetSafeView,
   type RunnerTargetCreateInput,
   type RunnerTargetDescriptor as RunnerTarget,
@@ -41,6 +42,8 @@ interface RunnerTargetRow {
   connection_json: string | null
   service_identity_json?: string | null
   runtime_json?: string | null
+  native_compute_json?: string | null
+  native_observation_json?: string | null
   health: RunnerTarget['health']
   last_seen_at: string | null
   revision: number
@@ -64,6 +67,8 @@ function fromRow(row: RunnerTargetRow): RunnerTarget {
       ? undefined
       : JSON.parse(row.service_identity_json) as unknown,
     runtime: row.runtime_json === undefined || row.runtime_json === null ? undefined : JSON.parse(row.runtime_json) as unknown,
+    native_compute: row.native_compute_json == null ? undefined : JSON.parse(row.native_compute_json) as unknown,
+    native_observation: row.native_observation_json == null ? undefined : JSON.parse(row.native_observation_json) as unknown,
     health: row.health,
     last_seen_at: row.last_seen_at,
     revision: row.revision,
@@ -91,6 +96,8 @@ export function seedBuiltinRunnerTargets(db: DatabaseSync): void {
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   )
   for (const target of BUILTIN_RUNNER_TARGETS) {
+    // Historical migrations call this before the kind CHECK is expanded.
+    if (target.kind === 'container-native') continue
     insert.run(
       target.target_id, target.display_name, target.kind, target.enabled ? 1 : 0, target.draining ? 1 : 0,
       JSON.stringify(target.capabilities), null, target.health, target.last_seen_at, target.revision,
@@ -132,13 +139,14 @@ export class RunnerTargetRegistry {
     validateIdentityRef(target)
     this.db.prepare(
       `INSERT INTO runner_targets
-        (target_id,display_name,kind,enabled,draining,capabilities_json,connection_json,service_identity_json,runtime_json,health,last_seen_at,revision,created_by,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        (target_id,display_name,kind,enabled,draining,capabilities_json,connection_json,service_identity_json,runtime_json,native_compute_json,health,last_seen_at,revision,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       target.target_id, target.display_name, target.kind, target.enabled ? 1 : 0, target.draining ? 1 : 0,
       JSON.stringify(target.capabilities), target.connection === undefined ? null : JSON.stringify(target.connection),
       JSON.stringify(target.service_identity),
       target.runtime === undefined ? null : JSON.stringify(target.runtime),
+      target.native_compute === undefined ? null : JSON.stringify(target.native_compute),
       target.health, target.last_seen_at, target.revision, target.created_by, target.created_at, target.updated_at,
     )
     return target
@@ -160,22 +168,25 @@ export class RunnerTargetRegistry {
       connection: input.connection === null ? undefined : (input.connection ?? current.connection),
       service_identity: input.service_identity === null ? undefined : (input.service_identity ?? current.service_identity),
       runtime: input.runtime === null ? undefined : (input.runtime ?? current.runtime),
+      native_compute: input.native_compute === null ? undefined : (input.native_compute ?? current.native_compute),
       revision: current.revision + 1,
       updated_at: nowIso(),
       // A configuration change invalidates the previous health observation.
       health: 'unknown',
+      native_observation: undefined,
       last_seen_at: null,
     })
     validateRefs(target)
     validateIdentityRef(target)
     const result = this.db.prepare(
-      `UPDATE runner_targets SET display_name=?,kind=?,enabled=?,draining=?,capabilities_json=?,connection_json=?,service_identity_json=?,runtime_json=?,
-       health=?,last_seen_at=?,revision=?,updated_at=? WHERE target_id=? AND revision=?`,
+      `UPDATE runner_targets SET display_name=?,kind=?,enabled=?,draining=?,capabilities_json=?,connection_json=?,service_identity_json=?,runtime_json=?,native_compute_json=?,
+       native_observation_json=NULL,health=?,last_seen_at=?,revision=?,updated_at=? WHERE target_id=? AND revision=?`,
     ).run(
       target.display_name, target.kind, target.enabled ? 1 : 0, target.draining ? 1 : 0,
       JSON.stringify(target.capabilities), target.connection === undefined ? null : JSON.stringify(target.connection),
       target.service_identity === undefined ? null : JSON.stringify(target.service_identity),
       target.runtime === undefined ? null : JSON.stringify(target.runtime),
+      target.native_compute === undefined ? null : JSON.stringify(target.native_compute),
       target.health, target.last_seen_at, target.revision, target.updated_at, targetId, current.revision,
     )
     if (Number(result.changes) !== 1) {
@@ -194,16 +205,18 @@ export class RunnerTargetRegistry {
   }
 
   /** Record an authenticated runner observation without changing config revision. */
-  observe(targetId: string, input: { expected_revision: number; health: 'online' | 'offline' }): RunnerTarget {
+  observe(targetId: string, input: { expected_revision: number; health: 'online' | 'offline'; native_observation?: ContainerNativeFingerprint }): RunnerTarget {
     const current = this.get(targetId)
+    if (input.native_observation !== undefined && current.kind !== 'container-native') throw new KernelError(422, 'runner_target_observation_invalid', 'native observation requires native target')
+    const observation = input.native_observation === undefined ? null : JSON.stringify(ContainerNativeFingerprint.parse(input.native_observation))
     if (input.expected_revision !== current.revision) {
       throw new KernelError(409, 'runner_target_revision_conflict',
         `runner target ${targetId} revision ${current.revision} does not match observed revision ${input.expected_revision}`)
     }
     const now = nowIso()
     const result = this.db.prepare(
-      'UPDATE runner_targets SET health=?,last_seen_at=?,updated_at=? WHERE target_id=? AND revision=?',
-    ).run(input.health, now, now, targetId, current.revision)
+      'UPDATE runner_targets SET health=?,last_seen_at=?,updated_at=?,native_observation_json=? WHERE target_id=? AND revision=?',
+    ).run(input.health, now, now, observation, targetId, current.revision)
     if (Number(result.changes) !== 1) {
       throw new KernelError(409, 'runner_target_revision_conflict',
         `runner target ${targetId} changed during health observation`)

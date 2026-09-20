@@ -1,7 +1,7 @@
 import type { PtyResult, PtySessionWire } from './pty-session-model'
 
 export type PtyContextKind = 'research' | 'chat' | 'subagent'
-export type PtyTargetKind = 'local-process' | 'local-docker' | 'remote-ssh'
+export type PtyTargetKind = 'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'
 
 export interface PtyContextDescriptor {
   context_kind: PtyContextKind

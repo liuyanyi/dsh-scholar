@@ -2,6 +2,8 @@
 
 > 规范性文档。这里定义从不可变输入到可验证结果的完整计算链路。
 
+research-base 新增正式 `container-native` 路径，当前科研容器直接执行，不创建嵌套 Docker；其网络与资源边界和 Docker 不同，详见 [当前科研容器 Runner](container-native-runner.md)。以下 Docker 安全参数仅描述 Docker 路径；native 不降低 Contract、Snapshot、Manifest、Evidence 校验。
+
 ## 1. 执行原则
 
 - echo 是唯一允许不启动命令的 Job；

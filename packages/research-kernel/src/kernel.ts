@@ -13,6 +13,7 @@ import {
 import { join, relative, sep, dirname } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
+import { ContainerNativeEnvironment, type ContainerNativeFingerprint } from '@dsh-scholar/research-schemas'
 import {
   ArtifactKind, ArtifactRecord, BudgetConstraints, BudgetRecord, Claim, CodeSnapshot, CorpusSnapshot, Decision, DirectionGatePayload,
   EvidenceItem, ExecutionConfig, ExperimentContract, FrozenProtocolPin, Gate, IdeaCard, IntegrityConfig, NoveltyAudit,
@@ -1516,7 +1517,8 @@ export class ResearchKernel {
     if (projectProfile?.runner_mode === 'isolated-subprocess' && projectTarget.kind !== 'local-process') {
       throw new KernelError(422, 'runner_target_profile_mismatch', 'isolated-subprocess profile requires a local-process target')
     }
-    if (projectProfile?.runner_mode === 'local-docker' && projectTarget.kind === 'local-process') {
+    if ((projectProfile?.runner_mode === 'local-docker' && !['local-docker', 'remote-ssh'].includes(projectTarget.kind))
+      || (projectProfile?.runner_mode === 'container-native' && projectTarget.kind !== 'container-native')) {
       throw new KernelError(422, 'runner_target_profile_mismatch', 'container profile cannot execute on a local-process target')
     }
     const project: ResearchProject = {
@@ -4584,7 +4586,7 @@ export class ResearchKernel {
   runnerTargetIdentityAuthorized(targetId: string, provided: string): boolean {
     return this.runnerTargets.identityAuthorized(targetId, provided)
   }
-  observeRunnerTarget(targetId: string, input: { expected_revision: number; health: 'online' | 'offline' }): RunnerTargetDescriptor {
+  observeRunnerTarget(targetId: string, input: { expected_revision: number; health: 'online' | 'offline'; native_observation?: ContainerNativeFingerprint }): RunnerTargetDescriptor {
     return this.runnerTargets.observe(targetId, input)
   }
 
@@ -4644,6 +4646,8 @@ export class ResearchKernel {
         const currentProfile = currentProfileId === null ? null : getRunnerProfile(currentProfileId)
         executionInput.runner_profile_id = target.kind === 'local-process'
           ? RUNNER_PROFILE_IDS.isolatedSubprocess
+          : target.kind === 'container-native'
+            ? (target.native_compute?.mode === 'nvidia' ? RUNNER_PROFILE_IDS.containerNativeGpu : RUNNER_PROFILE_IDS.containerNativeCpu)
           : currentProfile?.runner_mode === 'local-docker'
             ? currentProfile.profile_id
             : RUNNER_PROFILE_IDS.localDockerCpu
@@ -4662,6 +4666,7 @@ export class ResearchKernel {
         }
         const compatible = target.kind === 'local-process'
           ? profile.runner_mode === 'isolated-subprocess'
+          : target.kind === 'container-native' ? profile.runner_mode === 'container-native'
           : profile.runner_mode === 'local-docker'
         if (!compatible) {
           throw new KernelError(422, 'runner_profile_target_mismatch',
@@ -6476,11 +6481,15 @@ export class ResearchKernel {
       throw new KernelError(422, 'runner_target_unknown', `runner target '${targetRef}' is not registered`)
     }
     const runnerAssessment = assessRunnerEnvironment(runnerProfile, runnerTarget, ref => this.secretRefAvailable(ref))
+    if ((runnerTarget.kind === 'container-native' || runnerProfile.runner_mode === 'container-native')
+      && runnerAssessment.hardFailures.includes('profile_target_mismatch')) {
+      throw new KernelError(422, 'runner_target_profile_mismatch', 'container-native profiles require a container-native target exclusively')
+    }
     if (runnerAssessment.hardFailures.includes('target_offline')) {
       throw new KernelError(409, 'runner_target_offline', `runner target ${runnerTarget.target_id} is offline`)
     }
     if (runnerAssessment.hardFailures.includes('target_unprobed')) {
-      throw new KernelError(409, 'runner_target_unprobed', `remote runner target ${runnerTarget.target_id} has no fresh authenticated heartbeat`)
+      throw new KernelError(409, 'runner_target_unprobed', `runner target ${runnerTarget.target_id} has no fresh authenticated heartbeat`)
     }
     if (runnerAssessment.hardFailures.includes('target_capability_mismatch')) {
       throw new KernelError(422, 'runner_target_capability_mismatch', `runner target ${runnerTarget.target_id} cannot satisfy its configured compute mode`)
@@ -6491,14 +6500,15 @@ export class ResearchKernel {
     }
     // Preserve the primary execution-safety error: secure kinds are
     // container-only regardless of which target happens to be selected.
-    if (SECURE_KINDS.includes(input.kind) && runnerProfile.runner_mode !== 'local-docker') {
+    if (SECURE_KINDS.includes(input.kind) && runnerProfile.runner_mode === 'isolated-subprocess') {
       throw new KernelError(422, 'container_execution_required',
         `job kind ${input.kind} requires a container runner profile (got ${runnerProfile.profile_id}); host subprocess is prohibited (v2 §3.2)`)
     }
     if (runnerProfile.runner_mode === 'isolated-subprocess' && runnerTarget.kind !== 'local-process') {
       throw new KernelError(422, 'runner_target_profile_mismatch', 'isolated-subprocess profile requires a local-process target')
     }
-    if (runnerProfile.runner_mode === 'local-docker' && runnerTarget.kind === 'local-process') {
+    if ((runnerProfile.runner_mode === 'local-docker' && !['local-docker', 'remote-ssh'].includes(runnerTarget.kind))
+      || (runnerProfile.runner_mode === 'container-native' && runnerTarget.kind !== 'container-native')) {
       throw new KernelError(422, 'runner_target_profile_mismatch', 'container profile cannot execute on a local-process target')
     }
     if (runnerTarget.kind === 'remote-ssh' && runnerTarget.connection !== undefined) {
@@ -6805,7 +6815,8 @@ export class ResearchKernel {
       runner_target_revision: runnerTarget.revision,
       runner_target_hash: runnerTargetConfigHash(runnerTarget),
       image_digest: boundImageDigest,
-      runner_compute: runnerTarget.runtime?.compute ?? { mode: 'cpu' as const },
+      runner_compute: runnerTarget.native_compute ?? (runnerProfile.capabilities.includes('gpu')
+        ? { mode: 'nvidia' as const, devices: 'all' as const } : runnerTarget.runtime?.compute ?? { mode: 'cpu' as const }),
       ...(input.data_artifact_ids !== undefined ? { data_artifact_ids: input.data_artifact_ids } : {}),
       ...(input.output_contract !== undefined ? { output_contract: input.output_contract } : {}),
       protocol_pin: requestedProtocolPin,
@@ -7333,7 +7344,7 @@ export class ResearchKernel {
     leaseTtlSeconds = 300,
     limit = 8,
     targetFilter?: {
-      runner_target_kinds?: Array<'local-process' | 'local-docker' | 'remote-ssh'>
+      runner_target_kinds?: Array<'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'>
       runner_target_ids?: string[]
       include_unpinned?: boolean
     },
@@ -7848,9 +7859,25 @@ export class ResearchKernel {
       throw new KernelError(422, 'manifest_snapshot_mismatch',
         `run manifest code_snapshot_id ${String(manifest.code_snapshot_id)} does not match the job's code snapshot ${job.code_snapshot_id}`)
     }
-    if (job.image_digest !== '' && manifest.container_digest !== `docker:${job.image_digest}`) {
+    if (job.payload.runner_target_kind === 'container-native') {
+      const environment = ContainerNativeEnvironment.safeParse(manifest.execution_environment)
+      if (!environment.success || environment.data.configured_image_pin !== job.image_digest
+        || canonicalJsonDeep(environment.data.fingerprint.compute) !== canonicalJsonDeep(job.payload.runner_compute)) {
+        throw new KernelError(422, 'manifest_environment_mismatch', 'native environment fingerprint, image pin and compute must match the job')
+      }
+      const profile = getRunnerProfile(String(job.payload.runner_profile_id))
+      const fingerprint = environment.data.fingerprint
+      const resources = profile?.capabilities.includes('native-cgroup-v2') === true
+      if (!profile || fingerprint.network_isolation !== (profile.network_policy === 'none' ? 'network-namespace' : 'not-enforced')
+        || fingerprint.resource_isolation !== (resources ? 'cgroup-v2' : 'parent-container')
+        || (resources && canonicalJsonDeep(fingerprint.enforced_limits) !== canonicalJsonDeep(profile.limits))) {
+        throw new KernelError(422, 'manifest_environment_mismatch', 'native isolation must match the pinned profile and limits')
+      }
+    }
+    const digestPrefix = job.payload.runner_target_kind === 'container-native' ? 'configured' : 'docker'
+    if (job.image_digest !== '' && manifest.container_digest !== `${digestPrefix}:${job.image_digest}`) {
       throw new KernelError(422, 'manifest_container_mismatch',
-        `run manifest container_digest ${String(manifest.container_digest)} does not match the digest-pinned image docker:${job.image_digest}`)
+        `run manifest container_digest ${String(manifest.container_digest)} does not match the image pin ${digestPrefix}:${job.image_digest}`)
     }
     const jobDataHash = typeof job.payload.data_hash === 'string' && job.payload.data_hash !== '' ? job.payload.data_hash : null
     if (jobDataHash !== null && manifest.data_hash !== jobDataHash) {
@@ -8607,7 +8634,7 @@ export class ResearchKernel {
     if (target.kind === 'remote-ssh' && target.health !== 'online') {
       throw new PtyError('pty_target_unavailable', `remote runner target ${target.target_id} is not online`)
     }
-    const requiredAdapter = target.kind === 'local-process'
+    const requiredAdapter = target.kind === 'local-process' || target.kind === 'container-native'
       ? 'local-pty'
       : (target.kind === 'local-docker' ? 'local-docker' : 'remote-runner')
     if (this.ptyAdapter?.id !== requiredAdapter) {
@@ -9949,7 +9976,8 @@ export class ResearchKernel {
       throw new KernelError(422, 'runner_target_profile_mismatch',
         'isolated-subprocess reproduction profile requires a local-process target')
     }
-    if (profile.runner_mode === 'local-docker' && target.kind === 'local-process') {
+    if ((profile.runner_mode === 'local-docker' && !['local-docker', 'remote-ssh'].includes(target.kind))
+      || (profile.runner_mode === 'container-native' && target.kind !== 'container-native')) {
       throw new KernelError(422, 'runner_target_profile_mismatch',
         'container reproduction profile cannot execute on a local-process target')
     }

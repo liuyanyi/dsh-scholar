@@ -1,5 +1,7 @@
 # DSH Scholar 重建规范
 
+research-base 扩展：[当前科研容器 Runner](container-native-runner.md)（实现、部署、可选隔离），[GPU 与隔离验收](container-native-validation.md)（真实 GPU 结果、复现与待验收项）。
+
 > 规范版本：2.5
 > 更新日期：2026-08-20
 > 目标成熟度：Security Alpha，默认 gate-only

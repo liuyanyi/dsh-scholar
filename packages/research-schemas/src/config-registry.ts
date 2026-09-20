@@ -264,7 +264,7 @@ const CONFIG_REGISTRY_SOURCE: readonly ConfigKeyDefinitionSource[] = [
   {
     key: 'runner.mode',
     scope: 'runner-profile',
-    schema: z.enum(['subprocess', 'docker']),
+    schema: z.enum(['subprocess', 'docker', 'container-native']),
     default: 'subprocess',
     cli: { flag: 'mode' },
     securityFloor: true,

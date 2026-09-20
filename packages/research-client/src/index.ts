@@ -1353,7 +1353,7 @@ export class ResearchClient {
     limit = 1,
     leaseTtlSeconds = 300,
     targetFilter?: {
-      runner_target_kinds?: Array<'local-process' | 'local-docker' | 'remote-ssh'>
+      runner_target_kinds?: Array<'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'>
       runner_target_ids?: string[]
       include_unpinned?: boolean
     },
@@ -1378,10 +1378,12 @@ export class ResearchClient {
   getRunnerTarget(targetId: string): Promise<{
     target_id: string
     display_name: string
-    kind: 'local-process' | 'local-docker' | 'remote-ssh'
+    kind: 'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'
     enabled: boolean
     draining: boolean
     capabilities: string[]
+    native_compute?: import('@dsh-scholar/research-schemas').DockerCompute
+    last_seen_at?: string | null
     service_identity?: {
       scheme: 'file' | 'keyring' | 'vault'
       name: string
@@ -1403,7 +1405,7 @@ export class ResearchClient {
 
   heartbeatRunnerTarget(
     targetId: string,
-    input: { expected_revision: number; health: 'online' | 'offline' },
+    input: { expected_revision: number; health: 'online' | 'offline'; native_observation?: import('@dsh-scholar/research-schemas').ContainerNativeFingerprint },
     targetToken: string | undefined = this.runnerTargetToken,
   ): Promise<{
     target_id: string

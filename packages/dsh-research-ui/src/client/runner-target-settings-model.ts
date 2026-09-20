@@ -22,8 +22,12 @@ export function runnerTargetRuntimeDraft(runtime?: RunnerTargetRuntimeLite): Run
 export function runnerTargetRuntimePayload(
   kind: RunnerTargetKindLite,
   draft: RunnerTargetRuntimeDraft,
-): { ok: true; runtime: RunnerTargetRuntimeLite | undefined } | { ok: false; error: 'image' | 'devices' } {
+): { ok: true; runtime: RunnerTargetRuntimeLite | undefined; native_compute?: RunnerTargetRuntimeLite['compute'] } | { ok: false; error: 'image' | 'devices' } {
   if (kind === 'local-process') return { ok: true, runtime: undefined }
+  if (kind === 'container-native') {
+    const parsed = runnerTargetRuntimePayload('local-docker', { ...draft, imageDigest: DEFAULT_DOCKER_IMAGE_DIGEST })
+    return parsed.ok ? { ok: true, runtime: undefined, native_compute: parsed.runtime!.compute } : parsed
+  }
   const imageDigest = draft.imageDigest.trim()
   if (!IMAGE_DIGEST_RE.test(imageDigest)) return { ok: false, error: 'image' }
   if (draft.computeMode === 'cpu') {
@@ -99,6 +103,7 @@ export type RunnerTargetSettingsOperationInput =
         capabilities?: string[]
         service_identity: RunnerTargetSecretRefPayload
         runtime?: RunnerTargetRuntimeLite
+        native_compute?: RunnerTargetRuntimeLite['compute']
         connection?: {
           endpoint: RunnerTargetSecretRefPayload
           credential: RunnerTargetSecretRefPayload

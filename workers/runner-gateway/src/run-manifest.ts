@@ -18,6 +18,7 @@
 
 /** manifest 基座输入（本地 runner 与远端 Agent 各自提供等价字段）。 */
 export interface RunManifestInput {
+  execution_environment?: import('@dsh-scholar/research-schemas').ContainerNativeEnvironment
   run_id: string
   project_id: string
   job_id: string
@@ -27,7 +28,7 @@ export interface RunManifestInput {
   command: string[]
   code_commit: string
   code_snapshot_id: string | null
-  /** `docker:<image-digest>`（docker/container 执行）或 ''（fixture）。 */
+  /** docker:<digest>, configured:<digest> for native, or '' for fixtures. */
   container_digest: string
   data_hash: string
   /** §12.5 provenance seed（job/plan 固定；无 seed 为 null）。 */
@@ -42,6 +43,7 @@ export interface RunManifestInput {
 /** 构造 canonical RunManifest 基座（local 与 remote 唯一实现）。 */
 export function buildRunManifest(input: RunManifestInput): Record<string, unknown> {
   return {
+    ...(input.execution_environment === undefined ? {} : { execution_environment: input.execution_environment }),
     run_id: input.run_id,
     project_id: input.project_id,
     contract_id: input.contract_id,

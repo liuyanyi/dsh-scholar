@@ -35,7 +35,7 @@ describe('RunnerProfile 注册表 — opaque id 解析', () => {
       expect(profile!.display_name.length).toBeGreaterThan(0)
       expect(profile!.enabled).toBe(true)
     }
-    expect(BUILTIN_RUNNER_PROFILES).toHaveLength(3)
+    expect(BUILTIN_RUNNER_PROFILES).toHaveLength(11)
     // opaque id 集合与 RUNNER_PROFILE_IDS 完全一致（无漂移）
     expect(BUILTIN_RUNNER_PROFILES.map(p => p.profile_id).sort())
       .toEqual(Object.values(RUNNER_PROFILE_IDS).sort())

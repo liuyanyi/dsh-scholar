@@ -20,7 +20,8 @@ import { promisify } from 'node:util'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ResearchClient } from '@dsh-scholar/research-client'
 import type { JobRecord } from '@dsh-scholar/research-schemas'
-import { buildExecutionPlan, computeProfileConfigHash, getRunnerProfile, signExecutionPlan, type ExecutionPlan, type RunnerProfile } from '@dsh-scholar/research-schemas'
+import { buildExecutionPlan, computeProfileConfigHash, containerNativeFingerprintHash, getRunnerProfile, signExecutionPlan, type ExecutionPlan, type RunnerProfile } from '@dsh-scholar/research-schemas'
+import { prepareNativeIsolation, type NativeIsolation } from './container-native-isolation.js'
 import { LocalDockerAdapter, buildLocalDockerArgs, type DockerExecContext, type RunOutcome } from './execution-target.js'
 import { appendTerminalFramesWithLease } from './kernel-client.js'
 import {
@@ -34,6 +35,11 @@ import {
 import { canonicalJson, signManifest, type RunnerSigningKey } from './manifest-signing.js'
 import { buildRunManifest } from './run-manifest.js'
 import { probeDockerExecutionEnvironment } from './docker-preflight.js'
+import { ContainerNativeAdapter } from './container-native-target.js'
+import { collectNativeEnvironment, nativeEnvironment, resolveNativeExecutable } from './container-native-environment.js'
+import type { ContainerNativeEnvironment } from '@dsh-scholar/research-schemas'
+export { ContainerNativeAdapter } from './container-native-target.js'
+export { collectNativeEnvironment, nativeEnvironment, resolveNativeExecutable } from './container-native-environment.js'
 import { materializeCodeSnapshot, unpackCodeSnapshot } from './snapshot-materialize.js'
 
 const execFileAsync = promisify(execFile)
@@ -83,7 +89,7 @@ function assertSafeTexPath(path: string): void {
  * （本地 runner 与远端 Agent 复用同一契约），此处保持 re-export。
  */
 
-export type RunnerMode = 'subprocess' | 'docker'
+export type RunnerMode = 'subprocess' | 'docker' | 'container-native'
 
 export interface RunnerOptions {
   client: ResearchClient
@@ -323,7 +329,7 @@ export function parseLatexDiagnostics(logText: string): LatexDiagnostic[] {
  * §4 P0 (RUN-02/TEX-02): `engine` is a FIXED enum and every path is
  * root-relative without shell metacharacters — anything else throws and the
  * job fails before any command line is generated. */
-export function buildLatexRunScript(rootFile: string, engine = 'pdflatex', files: string[] = [rootFile]): string {
+export function buildLatexRunScript(rootFile: string, engine = 'pdflatex', files: string[] = [rootFile], native = false): string {
   if (!TEX_ENGINES.includes(engine)) {
     throw new Error(`latex engine '${engine}' is not in the fixed engine whitelist (${TEX_ENGINES.join('/')})`)
   }
@@ -332,11 +338,13 @@ export function buildLatexRunScript(rootFile: string, engine = 'pdflatex', files
   const base = rootFile.replace(/\.tex$/i, '')
   const copyLines = files
     .filter(f => f !== 'outputs' && !f.startsWith('outputs/'))
-    .map(f => `cp -R "/work/${f}" "$OUT/work/" 2>/dev/null || exit 9`)
+    .map(f => native
+      ? `mkdir -p "$OUT/work/$(dirname '${f}')" && cp "$DSH_WORK_DIR/${f}" "$OUT/work/${f}" || exit 9`
+      : `cp -R "/work/${f}" "$OUT/work/" 2>/dev/null || exit 9`)
     .join('\n')
   return `#!/bin/sh
 set +e
-OUT=/outputs
+OUT=${native ? '"$DSH_OUTPUTS_DIR"' : '/outputs'}
 mkdir -p "$OUT/work"
 chmod 777 "$OUT/work" 2>/dev/null
 ${copyLines}
@@ -344,12 +352,13 @@ cd "$OUT/work" || exit 1
 ROOT="${base}"
 ${engine} -interaction=nonstopmode -halt-on-error -file-line-error -recorder -no-shell-escape "$ROOT.tex" > "$OUT/pass1.log" 2>&1
 BIB=0
-if command -v bibtex > /dev/null 2>&1; then bibtex "$ROOT" > "$OUT/bibtex.log" 2>&1; BIB=$?; fi
+${native ? 'if [ -f "$ROOT.bcf" ]; then biber "$ROOT" > "$OUT/biber.log" 2>&1; BIB=$?; elif grep -q "\\\\bibdata" "$ROOT.aux" 2>/dev/null; then bibtex "$ROOT" > "$OUT/bibtex.log" 2>&1; BIB=$?; fi' : 'if command -v bibtex > /dev/null 2>&1; then bibtex "$ROOT" > "$OUT/bibtex.log" 2>&1; BIB=$?; fi'}
 ${engine} -interaction=nonstopmode -halt-on-error -file-line-error -recorder -no-shell-escape "$ROOT.tex" > "$OUT/pass2.log" 2>&1
 P2=$?
 ${engine} -interaction=nonstopmode -halt-on-error -file-line-error -recorder -no-shell-escape "$ROOT.tex" > "$OUT/pass3.log" 2>&1
 P3=$?
 PASS=$P2
+${native ? '[ "$BIB" -gt "$PASS" ] 2>/dev/null && PASS=$BIB' : ''}
 [ "$P3" -gt "$PASS" ] 2>/dev/null && PASS=$P3
 if [ -f "$ROOT.pdf" ]; then cp "$ROOT.pdf" "$OUT/paper.pdf"; fi
 if [ -f "$ROOT.log" ]; then cp "$ROOT.log" "$OUT/tex.log"; fi
@@ -374,6 +383,7 @@ exit "$PASS"
 /** Failure classification per design §4.6.2 (deterministic rules). */
 export function classifyFailure(outcome: RunOutcome): { failure_class: JobRecord['failure_class']; error: string } {
   if (outcome.exit_code === 0) return { failure_class: null, error: '' }
+  if (outcome.error?.startsWith('environment:')) return { failure_class: 'environment', error: outcome.error }
   if (outcome.error !== undefined && /empty command/i.test(outcome.error)) {
     return { failure_class: 'code_error', error: outcome.error }
   }
@@ -464,6 +474,7 @@ interface SpawnResult {
   stderr: string
   exitCode: number
   error?: string
+  signal?: NodeJS.Signals | null
 }
 
 interface SpawnCaptureOptions {
@@ -471,6 +482,7 @@ interface SpawnCaptureOptions {
   env?: NodeJS.ProcessEnv
   timeoutMs: number
   maxLogBytes: number
+  combinedLogLimit?: boolean
   jobId: string
   signal?: AbortSignal
   /** Container name when this spawn is `docker run` (registered for cancelRun). */
@@ -488,6 +500,7 @@ interface SpawnCaptureOptions {
  */
 function spawnCaptured(command: string[], options: SpawnCaptureOptions): Promise<SpawnResult> {
   const { cwd, env, timeoutMs, maxLogBytes, jobId, signal, container } = options
+  if (signal?.aborted) return Promise.resolve({ stdout: '', stderr: '', exitCode: -1, error: 'cancelled: execution terminated by cancel request', signal: null })
   return new Promise<SpawnResult>(resolve => {
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
@@ -524,10 +537,12 @@ function spawnCaptured(command: string[], options: SpawnCaptureOptions): Promise
       killTree()
     }
     signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted === true) onAbort()
 
-    const finish = (exitCode: number): void => {
+    const finish = (exitCode: number, exitSignal: NodeJS.Signals | null): void => {
       if (settled) return
       settled = true
+      killTree()
       activeRuns.delete(jobId)
       clearTimeout(timer)
       signal?.removeEventListener('abort', onAbort)
@@ -541,12 +556,13 @@ function spawnCaptured(command: string[], options: SpawnCaptureOptions): Promise
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
         exitCode,
         error,
+        signal: exitSignal,
       })
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
       outBytes += chunk.length
-      if (outBytes > maxLogBytes) {
+      if (outBytes > maxLogBytes || (options.combinedLogLimit === true && outBytes + errBytes > maxLogBytes)) {
         bufferExceeded = true
         killTree()
         return
@@ -558,7 +574,7 @@ function spawnCaptured(command: string[], options: SpawnCaptureOptions): Promise
     })
     child.stderr?.on('data', (chunk: Buffer) => {
       errBytes += chunk.length
-      if (errBytes > maxLogBytes) {
+      if (errBytes > maxLogBytes || (options.combinedLogLimit === true && outBytes + errBytes > maxLogBytes)) {
         bufferExceeded = true
         killTree()
         return
@@ -568,7 +584,7 @@ function spawnCaptured(command: string[], options: SpawnCaptureOptions): Promise
       stderrChunks.push(chunk)
     })
     child.on('error', (error: Error) => { spawnError = error.message })
-    child.on('close', (code: number | null) => finish(code === null ? -1 : code))
+    child.on('close', (code: number | null, exitSignal: NodeJS.Signals | null) => finish(code === null ? -1 : code, exitSignal))
   })
 }
 
@@ -642,7 +658,7 @@ async function runDocker(plan: ExecutionPlan, exec: DockerExecContext): Promise<
 export async function runnerTargetPinFailure(
   client: Pick<ResearchClient, 'getRunnerTarget'>,
   payload: Record<string, unknown>,
-  expectedKind: 'local-process' | 'local-docker',
+  expectedKind: 'local-process' | 'local-docker' | 'container-native',
   configuredTargetId: string | null,
 ): Promise<string | null> {
   const targetId = typeof payload.runner_target_id === 'string' && payload.runner_target_id !== ''
@@ -650,7 +666,7 @@ export async function runnerTargetPinFailure(
     : null
   const kind = typeof payload.runner_target_kind === 'string' ? payload.runner_target_kind : null
   if (targetId === null) return 'runner target pin is missing; id/kind/revision/hash are required together'
-  if ((kind !== 'local-process' && kind !== 'local-docker' && kind !== 'remote-ssh')
+  if ((kind !== 'local-process' && kind !== 'local-docker' && kind !== 'container-native' && kind !== 'remote-ssh')
     || typeof payload.runner_target_revision !== 'number'
     || typeof payload.runner_target_hash !== 'string'
     || payload.runner_target_hash === '') {
@@ -661,6 +677,8 @@ export async function runnerTargetPinFailure(
   }
   try {
     const current = await client.getRunnerTarget(targetId)
+    if (kind === 'container-native' && (current.health !== 'online' || typeof current.last_seen_at !== 'string'
+      || Date.now() - Date.parse(current.last_seen_at) > 60_000)) return 'native target has no fresh online heartbeat'
     if (!current.enabled || current.draining) {
       return `runner target ${targetId} is ${current.draining ? 'draining' : 'disabled'} at spawn time`
     }
@@ -695,6 +713,12 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
     throw new Error(`job ${job.job_id} is missing the Kernel claim lease fencing fields`)
   }
   const runId = claimed.run_id
+  const failNativePreparation = async (error: unknown): Promise<{ job: JobRecord; run: RunOutcome }> => {
+    const reason = `environment: native_preparation_failed: ${(error as Error).message}`
+    const failed = await client.completeJob({ job_id: job.job_id, owner, status: 'failed', failure_class: 'environment', error: reason, lease_generation: job.lease_generation, lease_token: job.lease_token })
+    const at = new Date().toISOString()
+    return { job: failed, run: { run_id: runId, exit_code: -1, started_at: at, finished_at: at, stdout: '', stderr: '', error: reason } }
+  }
   const leaseGeneration = claimed.lease_generation
   const leaseToken = claimed.lease_token
   const pendingFrames: Array<{
@@ -731,7 +755,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
   const pinnedTargetId = typeof targetPayload.runner_target_id === 'string' && targetPayload.runner_target_id !== ''
     ? targetPayload.runner_target_id
     : null
-  const expectedLocalKind = mode === 'docker' ? 'local-docker' : 'local-process'
+  const expectedLocalKind = mode === 'container-native' ? 'container-native' : mode === 'docker' ? 'local-docker' : 'local-process'
   const configuredTargetId = options.targetId
   const targetPinFailure = await runnerTargetPinFailure(client, targetPayload, expectedLocalKind, configuredTargetId)
   if (targetPinFailure !== null) {
@@ -763,9 +787,9 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
   // isolated subprocess is allowed only for an EXPLICIT trusted-smoke-fixture,
   // i.e. a smoke job whose payload carries trusted_fixture === true.
   const SECURE_KINDS: readonly string[] = ['baseline', 'pilot', 'formal', 'reproduce', 'latex-compile']
-  const untrustedSmokeSubprocess = job.kind === 'smoke' && mode !== 'docker'
+  const untrustedSmokeSubprocess = job.kind === 'smoke' && mode === 'subprocess'
     && (job.payload as Record<string, unknown>).trusted_fixture !== true
-  if ((SECURE_KINDS.includes(job.kind) && mode !== 'docker') || untrustedSmokeSubprocess) {
+  if ((SECURE_KINDS.includes(job.kind) && mode === 'subprocess') || untrustedSmokeSubprocess) {
     const rejected = await client.completeJob({
       job_id: job.job_id,
       owner,
@@ -833,7 +857,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
     throw new Error(`job ${job.job_id} rejected before execution (missing current runner profile pin)`)
   }
   if (resolvedProfile !== null) {
-    const expectedMode = resolvedProfile.runner_mode === 'local-docker' ? 'docker' : 'subprocess'
+    const expectedMode = resolvedProfile.runner_mode === 'container-native' ? 'container-native' : resolvedProfile.runner_mode === 'local-docker' ? 'docker' : 'subprocess'
     if (mode !== expectedMode) {
       const reason = `runner profile ${resolvedProfile.profile_id} requires ${expectedMode} mode, but this runner is ${mode}`
       const rejected = await client.completeJob({
@@ -876,15 +900,30 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
       if (archiveText === null) {
         throw new Error(`code snapshot artifact unreadable from CAS: ${codeSnapshotId} (project ${job.project_id})`)
       }
+      if (mode === 'container-native' && `sha256:${createHash('sha256').update(archiveText).digest('hex')}` !== codeSnapshotId) {
+        throw new Error('environment: native_code_snapshot_hash_mismatch')
+      }
       const files = unpackCodeSnapshot(archiveText)
       const materialized = materializeCodeSnapshot(files, workDir)
       if (materialized === 0) {
         throw new Error(`code snapshot ${codeSnapshotId} materialized zero files`)
       }
     }
+    if (mode === 'container-native') {
+      if (SECURE_KINDS.includes(job.kind) && job.kind !== 'latex-compile' && !codeSnapshotId) throw new Error('environment: native_snapshot_required')
+      const dataIds = Array.isArray(job.payload.data_artifact_ids) ? job.payload.data_artifact_ids : []
+      mkdirSync(join(workDir, 'inputs', 'data'), { recursive: true })
+      for (const id of dataIds) {
+        if (typeof id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(id)) throw new Error('environment: native_data_id_invalid')
+        const artifact = await client.fetchArtifactBytes(job.project_id, id)
+        if (artifact === null || `sha256:${createHash('sha256').update(artifact.content).digest('hex')}` !== id) throw new Error('environment: native_data_hash_mismatch')
+        writeFileSync(join(workDir, 'inputs', 'data', id.slice(7)), artifact.content, { mode: 0o400 })
+      }
+    }
   } catch (error) {
     // Materialization failure: never run the job, clean up the temp dir.
     rmSync(workDir, { recursive: true, force: true })
+    if (mode === 'container-native') return failNativePreparation(error)
     throw error
   }
   // §12 (TEX-02): latex-compile binds a FROZEN TeX snapshot — fetch its
@@ -901,12 +940,13 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
       }
       const engine = typeof job.payload.engine === 'string' && job.payload.engine !== '' ? job.payload.engine : 'pdflatex'
       const fileList = manifest.files.map((f: { path: string }) => f.path)
-      writeFileSync(join(workDir, 'run.sh'), buildLatexRunScript(manifest.root_file, engine, fileList), { mode: 0o755 })
+      writeFileSync(join(workDir, 'run.sh'), buildLatexRunScript(manifest.root_file, engine, fileList, mode === 'container-native'), { mode: 0o755 })
       // umask may strip the world bits (e.g. 0077 → 0700): the container user
       // (65534) must be able to READ the script — force the mode explicitly.
       chmodSync(join(workDir, 'run.sh'), 0o755)
     } catch (error) {
       rmSync(workDir, { recursive: true, force: true })
+      if (mode === 'container-native') return failNativePreparation(error)
       throw error
     }
   }
@@ -917,6 +957,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
     : (job.kind === 'latex-compile' ? 'texlive/texlive:latest' : 'node:22-alpine')
 
   let run: RunOutcome
+  let executionEnvironment: ContainerNativeEnvironment | undefined
   // §12.5 (P0): the in-container execution receives its run identity so the
   // metrics FILE it writes back can prove run/contract/seed provenance.
   const runEnv: Record<string, string> = {
@@ -985,7 +1026,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
     // network/opaque profile_id + config hash pin）。
     const plan = buildExecutionPlan(job, {
       run_id: runId,
-      command,
+      command: mode === 'container-native' ? trustedSubprocessCommand : command,
       lease: {
         owner,
         generation: leaseGeneration,
@@ -1001,7 +1042,52 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
       cancel: cancelRun,
       targetId: configuredTargetId,
     })
-    run = mode === 'docker'
+    const nativeTarget = new ContainerNativeAdapter({
+      jobId: job.job_id, targetId: configuredTargetId, cancel: cancelRun,
+      nativeRun: async (nativePlan, exec) => {
+        const started = new Date().toISOString()
+        let isolation: NativeIsolation | undefined
+        try {
+          const env = nativeEnvironment(exec.cwd, nativePlan.compute)
+          for (const key of ['DSH_RUN_ID', 'DSH_CONTRACT_ID', 'DSH_SEED']) env[key] = runEnv[key] ?? ''
+          const executable = resolveNativeExecutable(exec.command[0] ?? '', exec.cwd, env)
+          if (texSnapshot !== undefined) {
+            resolveNativeExecutable(typeof job.payload.engine === 'string' ? job.payload.engine : 'pdflatex', exec.cwd, env)
+            const texFiles = (texSnapshot as TexSnapshotManifest).files
+            if (texFiles.some(file => /\.bib$/i.test(file.path))) {
+              const usesBiber = texFiles.filter(file => /\.tex$/i.test(file.path)).some(file => {
+                const source = readFileSync(join(exec.cwd, file.path), 'utf8')
+                return /\\usepackage(?:\[[^\]]*\])?\{biblatex\}/.test(source) && !/backend\s*=\s*bibtex/.test(source)
+              })
+              resolveNativeExecutable(usesBiber ? 'biber' : 'bibtex', exec.cwd, env)
+            }
+          }
+          executionEnvironment = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest)
+          const pinFailure = await runnerTargetPinFailure(client, targetPayload, 'container-native', configuredTargetId)
+          if (pinFailure !== null) throw new Error(`environment: ${pinFailure}`)
+          isolation = await prepareNativeIsolation(nativePlan, exec.cwd, env)
+          Object.assign(executionEnvironment.fingerprint, { network_isolation: isolation.network_isolation, resource_isolation: isolation.resource_isolation, ...(isolation.enforced_limits ? { enforced_limits: isolation.enforced_limits } : {}) })
+          executionEnvironment.fingerprint_hash = containerNativeFingerprintHash(executionEnvironment.fingerprint)
+          const finalPinFailure = await runnerTargetPinFailure(client, targetPayload, 'container-native', configuredTargetId)
+          if (finalPinFailure !== null) throw new Error(`environment: ${finalPinFailure}`)
+          const result = await spawnCaptured(isolation.wrap([executable, ...exec.command.slice(1)]), {
+            cwd: exec.cwd, env, jobId: exec.jobId, signal: exec.signal, onChunk: exec.onChunk,
+            timeoutMs: nativePlan.limits.timeout_ms, maxLogBytes: Math.min(maxLogBytes, nativePlan.limits.max_log_bytes),
+            combinedLogLimit: true,
+          })
+          await isolation.cleanup()
+          return { run_id: exec.runId, exit_code: result.exitCode, started_at: started, finished_at: new Date().toISOString(), stdout: result.stdout, stderr: result.stderr, error: result.error, signal: result.signal }
+        } catch (error) {
+          try { await isolation?.cleanup() } catch (cleanupError) {
+            return { run_id: exec.runId, exit_code: -1, started_at: started, finished_at: new Date().toISOString(), stdout: '', stderr: '', error: `environment: ${(cleanupError as Error).message}` }
+          }
+          return { run_id: exec.runId, exit_code: -1, started_at: started, finished_at: new Date().toISOString(), stdout: '', stderr: '', error: `environment: ${(error as Error).message}` }
+        }
+      },
+    })
+    run = mode === 'container-native'
+      ? await nativeTarget.execute(planForExecution, { cwd: workDir, signal, onChunk, runEnv })
+      : mode === 'docker'
       ? await dockerTarget.execute(planForExecution, { cwd: workDir, signal, onChunk, runEnv })
       : await runSubprocess(trustedSubprocessCommand, workDir, timeoutMs, maxLogBytes, job.job_id, signal, onChunk, runId, runEnv)
   }
@@ -1018,7 +1104,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
       exit_code: run.exit_code,
       compute: (job.payload as { runner_compute?: { mode: 'cpu' } | { mode: 'nvidia'; devices: 'all' | string[] } }).runner_compute
         ?? { mode: 'cpu' },
-      signal: null,
+      signal: run.signal ?? null,
       timed_out: run.error !== undefined && run.error.includes('timed out'),
       cancelled: cancelledJobs.has(job.job_id),
     }),
@@ -1028,6 +1114,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
   // Cancel already landed (design §12.6): the kernel holds the authoritative
   // `cancelled` state — never complete it, never re-run the manifest path.
   if (cancelledJobs.has(job.job_id)) {
+    rmSync(workDir, { recursive: true, force: true })
     const cancelled = await client.getJob(job.job_id).catch(() => job)
     return { job: cancelled, run }
   }
@@ -1045,7 +1132,8 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
       command: job.command,
       code_commit: typeof job.payload.code_commit === 'string' ? job.payload.code_commit : '',
       code_snapshot_id: codeSnapshotId ?? null,
-      container_digest: mode === 'docker' ? `docker:${image}` : '',
+      container_digest: mode === 'container-native' ? `configured:${image}` : mode === 'docker' ? `docker:${image}` : '',
+      execution_environment: executionEnvironment,
       data_hash: typeof job.payload.data_hash === 'string' ? job.payload.data_hash : '',
       seed: typeof job.payload.seed === 'number' ? job.payload.seed : null,
       started_at: run.started_at,
@@ -1055,12 +1143,13 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
         ?? { mode: 'cpu' },
     })
 
+    const environmentMetadata = executionEnvironment === undefined ? {} : { execution_environment_hash: executionEnvironment.fingerprint_hash }
     const logContent = `=== dsh-scholar run ${run.run_id} (job ${job.job_id}, kind ${job.kind}) ===\nstarted: ${run.started_at}\nfinished: ${run.finished_at}\nexit: ${run.exit_code}\n\n--- stdout ---\n${run.stdout}\n\n--- stderr ---\n${run.stderr}\n${run.error !== undefined ? `\n--- error ---\n${run.error}\n` : ''}`
     const logArtifact = await client.registerArtifact({
       project_id: job.project_id,
       kind: 'log',
       content_base64: Buffer.from(logContent).toString('base64'),
-      metadata: { run_id: run.run_id, job_id: job.job_id },
+      metadata: { run_id: run.run_id, job_id: job.job_id, ...environmentMetadata },
       media_type: 'text/plain; charset=utf-8',
       file_name: `run-${run.run_id}.log`,
     })
@@ -1084,7 +1173,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
           content_base64: pdf.toString('base64'),
           media_type: 'application/pdf',
           file_name: 'paper.pdf',
-          metadata: { run_id: run.run_id, job_id: job.job_id, tex_document_id: texManifest.document_id, tex_revision: texManifest.revision },
+          metadata: { run_id: run.run_id, job_id: job.job_id, tex_document_id: texManifest.document_id, tex_revision: texManifest.revision, ...environmentMetadata },
         })
         pdfArtifact = rec.artifact_id
       }
@@ -1100,13 +1189,13 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
           content_base64: Buffer.from(logText).toString('base64'),
           media_type: 'text/plain; charset=utf-8',
           file_name: `tex-${texManifest.revision}.log`,
-          metadata: { run_id: run.run_id, job_id: job.job_id, tex_document_id: texManifest.document_id, tex_revision: texManifest.revision },
+          metadata: { run_id: run.run_id, job_id: job.job_id, tex_document_id: texManifest.document_id, tex_revision: texManifest.revision, ...environmentMetadata },
         })
         texLogArtifact = rec.artifact_id
       }
       const aux: Record<string, string> = {}
       for (const f of readdirSync(outputsDir)) {
-        if (/\\.(aux|bbl|blg|fls)$/.test(f)) aux[f] = readFileSync(join(outputsDir, f), 'base64')
+        if (/\.(aux|bbl|blg|fls)$/.test(f)) aux[f] = readFileSync(join(outputsDir, f), 'base64')
       }
       let auxArtifact: string | null = null
       if (Object.keys(aux).length > 0) {
@@ -1118,7 +1207,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
           content_base64: Buffer.from(JSON.stringify(aux)).toString('base64'),
           media_type: 'application/json',
           file_name: `tex-${texManifest.revision}-aux.json`,
-          metadata: { run_id: run.run_id, job_id: job.job_id },
+          metadata: { run_id: run.run_id, job_id: job.job_id, ...environmentMetadata },
         })
         auxArtifact = rec.artifact_id
       }
@@ -1199,6 +1288,7 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
         content_base64: Buffer.from(metricsContent).toString('base64'),
         metadata: {
           run_id: run.run_id, job_id: job.job_id, metrics: metrics.length,
+          ...environmentMetadata,
           source: metricsFromFile !== null ? 'metrics-file' : 'stdout-json',
         },
       })

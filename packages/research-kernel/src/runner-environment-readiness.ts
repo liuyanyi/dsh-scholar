@@ -44,7 +44,16 @@ export function assessRunnerEnvironment(
   else if (target.health !== 'online') failures.push('target_unprobed')
 
   if (profile.runner_mode === 'isolated-subprocess' && target.kind !== 'local-process') hard('profile_target_mismatch')
-  if (profile.runner_mode === 'local-docker' && target.kind === 'local-process') hard('profile_target_mismatch')
+  if (profile.runner_mode === 'local-docker' && !['local-docker', 'remote-ssh'].includes(target.kind)) hard('profile_target_mismatch')
+  if (profile.runner_mode === 'container-native' && target.kind !== 'container-native') hard('profile_target_mismatch')
+  if (target.kind === 'container-native') {
+    const seenMs = target.last_seen_at === null ? Number.NaN : Date.parse(target.last_seen_at)
+    if (target.health !== 'online' || !Number.isFinite(seenMs) || nowMs - seenMs > RUNNER_TARGET_HEARTBEAT_TTL_MS) hard('target_unprobed')
+    if ((profile.network_policy === 'inherited' && !target.capabilities.includes('network-inherited'))
+      || ((profile.capabilities.includes('gpu') || target.native_compute?.mode === 'nvidia') && !target.capabilities.includes('nvidia'))
+      || (!profile.capabilities.includes('gpu') && target.native_compute?.mode === 'nvidia')
+      || (profile.capabilities.includes('gpu') && target.native_compute?.mode === 'cpu')) hard('target_capability_mismatch')
+  }
 
   if (target.kind === 'remote-ssh') {
     if (target.connection === undefined) {

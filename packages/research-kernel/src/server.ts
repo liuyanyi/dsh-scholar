@@ -14,6 +14,7 @@ import { BUILTIN_RUNNER_PROFILES } from '@dsh-scholar/research-schemas'
 import { TexError } from './tex-workspace.js'
 import { PtyError } from './pty-session.js'
 import { PtyContextError, type PtyResolvedContext } from './pty-context.js'
+import { ContainerNativeFingerprint } from '@dsh-scholar/research-schemas'
 import { WorkspaceError } from './workspace-store.js'
 import { PtyOpenRequest, PtyControlRequest, PtyAttachRequest, PtyDetachRequest, PtyCloseRequest, HumanPrincipal, NoveltyAudit, ObservedPhase, WorkspaceWriteRequest, WorkspaceMoveRequest, generateJsonSchema, randomId, ReproductionReportInput, OcrRequestCreateInput, IdeaDraft, runnerTargetConfigHash, ConfigWriteScopeSchema, SettingsWriteTransactionInput, type PtySession } from '@dsh-scholar/research-schemas'
 import {
@@ -822,6 +823,7 @@ const uploadSessionBeginSchema = z.object({
 const runnerTargetHeartbeatSchema = z.object({
   expected_revision: z.number().int().positive(),
   health: z.enum(['online', 'offline']),
+  native_observation: ContainerNativeFingerprint.optional(),
 }).strict()
 
 /**
@@ -3036,7 +3038,7 @@ function route(req: IncomingMessage, res: ServerResponse, kernel: ResearchKernel
               owner: z.string().min(1),
               lease_ttl_seconds: z.number().int().positive().optional(),
               limit: z.number().int().positive().max(64).optional(),
-              runner_target_kinds: z.array(z.enum(['local-process', 'local-docker', 'remote-ssh'])).max(3).optional(),
+              runner_target_kinds: z.array(z.enum(['local-process', 'local-docker', 'container-native', 'remote-ssh'])).max(4).optional(),
               runner_target_ids: z.array(z.string().min(1).max(120)).max(64).optional(),
               include_unpinned: z.boolean().optional(),
             }).parse(body)

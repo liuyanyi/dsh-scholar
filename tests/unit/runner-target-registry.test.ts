@@ -118,6 +118,7 @@ describe('EXEC-ENV-02 configurable runner targets', () => {
     const kernel = new ConfiguredTestKernel({ dbPath: join(root, 'kernel.db'), casRoot: join(root, 'cas'), secretRoot })
     try {
       expect(kernel.listRunnerTargets().map(target => target.target_id)).toEqual([
+        'target_container_native_v1',
         'target_local_docker_v1',
         'target_local_process_v1',
       ])

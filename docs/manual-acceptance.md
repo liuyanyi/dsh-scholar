@@ -4,6 +4,20 @@
 
 本规范采用“代码优先、人工后验”的两阶段方式。
 
+## Container Native 验收
+
+状态：**真实 GPU 小规模计算及 approved baseline 签名链路通过，硬隔离成功路径 / 完整科研链 / 浏览器待验收**。2026-09-20 使用独立 uv 环境完成 Blackwell GPU 实测，见 [验收记录](container-native-validation.md)。宿主 cgroup 只读且 namespace 被禁；TeX 和发布流程本轮不处理。
+
+1. 按 [部署说明](container-native-runner.md) 配置目标身份，启用当前科研容器；确认 Settings 的 enabled/draining、health、CPU/GPU、设备及环境摘要，原 Docker 默认值不自动被覆盖。
+2. 选择 GPU native profile、NVIDIA capability 和一个可见设备；创建并审批最小 Contract、冻结 Code/Data Snapshot，正式实验同时满足既有 Protocol/Gate 要求。
+3. 执行最小 PyTorch CUDA 程序，写 MetricsFileV1；确认 Job/Run、日志、Artifacts、签名 Manifest 和 Evidence 走原有完成流程。检查 configured image pin 与 observed identity 区分、fingerprint hash、compute selector 和实际未隔离网络记录。
+4. 运行期间编辑源码，确认当前 Run 输入不变；测试取消与子进程回收、错误 GPU selector、disabled/draining/offline 和过期配置 pin 拒绝。
+5. 在同一容器安装实际 TeX 工具，分别验证项目使用的 pdflatex/xelatex/lualatex/bibtex/biber 流程、PDF/log/aux 产物、diagnostics、并发编辑 stale、authoritative/preview 区分及无 shell escape。
+6. 另在具备 Docker 的环境执行已有 Docker E2E 和 release/clean-room 回归。本轮未改造 clean-room 为 native 执行。
+7. 在允许 namespace 和 cgroup v2 委派的环境，分别选择 resources/offline/isolated Profile，执行 opt-in 隔离测试，检查 CPU/内存/PID 限制、断网、取消/超时/OOM 后回收与 Manifest 的实际 enforced limits。撤销权限必须失败，不能退回继承模式。
+
+验收记录至少包含 Scholar commit、Node/Python/CUDA/驱动/TeX 版本、Target/Profile revision/hash、Contract/Snapshot/Run/Manifest/Artifact ID、Evidence 结果与未通过项。不得记录令牌或完整环境变量。
+
 - **MANUAL-BRAND-DSH-SCHOLAR**：分别打开中文和英文 Standalone 解锁页及主工作台，检查 Header、Sidebar、浏览器标题、Chat 欢迎/导出和 Settings 卡片。预期组合字标均为 `dsh Scholar`，不再出现 `dsh Research`，同时 `Research Kernel` 等技术名保持原样。
 
 ## 1. 适用范围

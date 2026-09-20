@@ -10,7 +10,7 @@
 
 import type { PtyContext, PtyContextKind } from '@dsh-scholar/research-schemas'
 
-export type PtyTargetKind = 'local-process' | 'local-docker' | 'remote-ssh'
+export type PtyTargetKind = 'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'
 
 /** Server-owned source record. No value in this object may originate from a
  * browser request body except the lookup key used to find it. */

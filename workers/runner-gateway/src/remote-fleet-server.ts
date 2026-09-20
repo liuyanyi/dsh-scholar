@@ -95,7 +95,7 @@ export interface FleetKernelClient {
     limit: number,
     leaseTtlSeconds?: number,
     targetFilter?: {
-      runner_target_kinds?: Array<'local-process' | 'local-docker' | 'remote-ssh'>
+      runner_target_kinds?: Array<'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'>
       runner_target_ids?: string[]
       include_unpinned?: boolean
     },
@@ -118,7 +118,7 @@ export interface FleetKernelClient {
    * whose pre-registry plans carry no target revision/hash pins. */
   getRunnerTarget?(targetId: string): Promise<{
     target_id: string
-    kind: 'local-process' | 'local-docker' | 'remote-ssh'
+    kind: 'local-process' | 'local-docker' | 'container-native' | 'remote-ssh'
     enabled: boolean
     draining: boolean
     revision: number

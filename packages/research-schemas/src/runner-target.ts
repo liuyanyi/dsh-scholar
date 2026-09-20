@@ -2,9 +2,10 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { SecretRef } from './provider.js'
-import { DockerRuntime, type DockerRuntime as DockerRuntimeType } from './runner-environment.js'
+import { ContainerNativeFingerprint } from './container-native.js'
+import { DockerCompute, DockerRuntime, type DockerRuntime as DockerRuntimeType } from './runner-environment.js'
 
-export const RunnerTargetKind = z.enum(['local-process', 'local-docker', 'remote-ssh'])
+export const RunnerTargetKind = z.enum(['local-process', 'local-docker', 'container-native', 'remote-ssh'])
 export type RunnerTargetKind = z.infer<typeof RunnerTargetKind>
 
 export const RunnerTargetConnection = z.object({
@@ -18,17 +19,20 @@ export const RunnerTargetConnection = z.object({
 export type RunnerTargetConnection = z.infer<typeof RunnerTargetConnection>
 
 function validateKindConnection(
-  value: { kind: RunnerTargetKind; connection?: RunnerTargetConnection | null; runtime?: DockerRuntimeType | null },
+  value: { kind: RunnerTargetKind; connection?: RunnerTargetConnection | null; runtime?: DockerRuntimeType | null; native_compute?: DockerCompute },
   ctx: z.RefinementCtx,
 ): void {
+  if (value.native_compute !== undefined && value.kind !== 'container-native') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['native_compute'], message: 'native_compute requires container-native' })
+  }
   if (value.kind === 'remote-ssh' && value.connection === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['connection'], message: 'remote-ssh requires endpoint, credential and known_hosts SecretRefs' })
   }
   if (value.kind !== 'remote-ssh' && value.connection !== undefined && value.connection !== null) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['connection'], message: 'local targets cannot carry remote connection metadata' })
   }
-  if (value.kind === 'local-process' && value.runtime !== undefined && value.runtime !== null) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runtime'], message: 'local-process cannot carry Docker runtime configuration' })
+  if ((value.kind === 'local-process' || value.kind === 'container-native') && value.runtime !== undefined && value.runtime !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['runtime'], message: `${value.kind} cannot carry Docker runtime configuration` })
   }
 }
 
@@ -45,6 +49,7 @@ export const RunnerTargetCreateInput = z.object({
    * service token. */
   service_identity: SecretRef,
   runtime: DockerRuntime.optional(),
+  native_compute: DockerCompute.optional(),
   connection: RunnerTargetConnection.optional(),
 }).strict().superRefine((value, ctx) => {
   validateKindConnection(value, ctx)
@@ -60,6 +65,7 @@ export const RunnerTargetUpdateInput = z.object({
   capabilities: z.array(z.string().min(1).max(120)).max(128).optional(),
   service_identity: SecretRef.nullable().optional(),
   runtime: DockerRuntime.nullable().optional(),
+  native_compute: DockerCompute.nullable().optional(),
   connection: RunnerTargetConnection.nullable().optional(),
 }).strict()
 export type RunnerTargetUpdateInput = z.infer<typeof RunnerTargetUpdateInput>
@@ -75,8 +81,10 @@ export const RunnerTargetDescriptor = z.object({
    * Such targets are deliberately unable to heartbeat until configured. */
   service_identity: SecretRef.optional(),
   runtime: DockerRuntime.optional(),
+  native_compute: DockerCompute.optional(),
   connection: RunnerTargetConnection.optional(),
   health: z.enum(['unknown', 'online', 'offline']).default('unknown'),
+  native_observation: ContainerNativeFingerprint.optional(),
   last_seen_at: z.string().nullable().default(null),
   revision: z.number().int().positive(),
   created_by: z.string(),
@@ -107,6 +115,7 @@ export function runnerTargetConfigHash(target: RunnerTargetDescriptor): string {
     service_identity: target.service_identity,
     connection: target.connection,
     ...(target.runtime === undefined ? {} : { runtime: target.runtime }),
+    ...(target.native_compute === undefined ? {} : { native_compute: target.native_compute }),
     revision: target.revision,
   })).digest('hex')}`
 }
@@ -139,6 +148,12 @@ export function runnerTargetSafeView(
 }
 
 export const BUILTIN_RUNNER_TARGETS: readonly RunnerTargetDescriptor[] = [
+  RunnerTargetDescriptor.parse({
+    target_id: 'target_container_native_v1', display_name: 'Current Research Container', kind: 'container-native',
+    enabled: false, draining: false, capabilities: ['linux', 'cpu', 'container-native', 'network-inherited'],
+    service_identity: { scheme: 'file', name: 'runner-targets/target_container_native_v1.token', scope: 'instance' }, revision: 1,
+    created_by: 'builtin', created_at: '1970-01-01T00:00:00.000Z', updated_at: '1970-01-01T00:00:00.000Z',
+  }),
   RunnerTargetDescriptor.parse({
     target_id: 'target_local_process_v1', display_name: 'Local process (trusted dev/smoke only)', kind: 'local-process',
     enabled: true, draining: false, capabilities: ['trusted-smoke-fixture-only'],

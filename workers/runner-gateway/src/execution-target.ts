@@ -37,6 +37,7 @@ export interface RunOutcome {
   stdout: string
   stderr: string
   error?: string
+  signal?: NodeJS.Signals | null
 }
 
 /** prepare(plan) 的产物：target 侧对 plan 的冻结承诺。 */
@@ -216,6 +217,7 @@ export class LocalDockerAdapter implements ExecutionTarget {
     if (parsed.target_kind !== null && parsed.target_kind !== 'local-docker') {
       throw new ExecutionTargetError(`local Docker target refuses ${parsed.target_kind} plan ${parsed.plan_id}`)
     }
+    if (parsed.network.policy !== 'none') throw new ExecutionTargetError('Docker requires network policy none')
     this.preparedFingerprint = executionPlanFingerprint(deepFreezePlan(parsed))
     return { target_id: this.target_id, fingerprint: this.preparedFingerprint }
   }

@@ -1,5 +1,7 @@
 # Container Native Runner 实现计划
 
+实现记录和部署说明见 [当前科研容器 Runner](container-native-runner.md)。默认通过显式 `network_policy=inherited` 表达父容器网络；2026-09-20 按追加需求提供可选 cgroup v2、断网及组合 Profile，默认行为保持兼容。Manifest 使用 `configured:` image pin 与签名环境指纹。真实 GPU 小规模计算和 baseline 签名链路已通过，硬隔离受宿主权限限制尚待成功路径验收，见 [验收记录](container-native-validation.md)。本轮不处理 TeX 和发布流程。
+
 ## 1. 目标
 
 本阶段为 DSH Scholar 增加一种正式执行模式：

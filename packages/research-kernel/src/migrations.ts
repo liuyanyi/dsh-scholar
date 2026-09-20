@@ -29,7 +29,7 @@ import { CONFIG_WRITE_DDL } from './config-write-store.js'
 import { ArtifactCas } from './cas.js'
 
 /** Code-side schema version; bumped only when the migration set grows. */
-export const SCHEMA_VERSION = 35
+export const SCHEMA_VERSION = 36
 
 export interface MigrationReport {
   /** Row counts per affected table (legacy import steps). */
@@ -1627,6 +1627,33 @@ const ptyContextReset = (db: DatabaseSync, report: MigrationReport): void => {
  * its checksum is recorded in schema_migrations and a mismatch is fatal.
  * New steps append at the end and bump SCHEMA_VERSION.
  */
+const CONTAINER_NATIVE_TARGET_DDL = `
+CREATE TABLE runner_targets_native (
+  target_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('local-process','local-docker','remote-ssh','container-native')),
+  enabled INTEGER NOT NULL DEFAULT 1, draining INTEGER NOT NULL DEFAULT 0,
+  capabilities_json TEXT NOT NULL DEFAULT '[]', connection_json TEXT,
+  health TEXT NOT NULL DEFAULT 'unknown' CHECK (health IN ('unknown','online','offline')),
+  last_seen_at TEXT, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  runtime_json TEXT, service_identity_json TEXT
+);
+INSERT INTO runner_targets_native SELECT target_id,display_name,kind,enabled,draining,
+  capabilities_json,connection_json,health,last_seen_at,revision,created_by,created_at,updated_at,
+  runtime_json,service_identity_json FROM runner_targets;
+DROP TABLE runner_targets;
+ALTER TABLE runner_targets_native RENAME TO runner_targets;
+ALTER TABLE runner_targets ADD COLUMN native_compute_json TEXT;
+ALTER TABLE runner_targets ADD COLUMN native_observation_json TEXT;
+CREATE INDEX idx_runner_targets_schedulable ON runner_targets(enabled,draining,health,kind);
+INSERT OR IGNORE INTO runner_targets
+  (target_id,display_name,kind,enabled,capabilities_json,service_identity_json,created_by,created_at,updated_at)
+VALUES ('target_container_native_v1','Current Research Container','container-native',0,
+  '["linux","cpu","container-native","network-inherited"]',
+  '{"scheme":"file","name":"runner-targets/target_container_native_v1.token","scope":"instance"}',
+  'builtin','1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z');
+`
+
 export const MIGRATIONS: Migration[] = [
   {
     id: '0001_schema_v2_initial',
@@ -1851,6 +1878,12 @@ export const MIGRATIONS: Migration[] = [
     description: 'STORE-06: scrub legacy job lease plaintext and remove the obsolete PTY plaintext column',
     body: `${removePlaintextLeaseStorage.toString()}\n\n${PTY_CURRENT_DDL}`,
     up: removePlaintextLeaseStorage,
+  },
+  {
+    id: '0039_container_native_targets',
+    description: 'Container native target kind, preserving all existing target pins and identities',
+    body: CONTAINER_NATIVE_TARGET_DDL,
+    up: (db) => { db.exec(CONTAINER_NATIVE_TARGET_DDL) },
   },
 ]
 

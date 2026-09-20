@@ -70,6 +70,7 @@ set -u
 cd "$(dirname "$0")"
 
 SCRIPTS=(
+  run-container-native-tests.sh
   run-isolation-tests.sh
   run-evidence-tests.sh
   run-manifest-tests.sh

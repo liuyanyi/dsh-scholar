@@ -43,7 +43,7 @@ export const PROFILE_CONFIG_HASH_RE = /^sha256:[0-9a-f]{64}$/
  * 不是 ExecutionTarget——它是 trusted-smoke-fixture 专用的非 target 兼容层
  * （execution-runtime.md §1），secure kinds 一律拒绝。
  */
-export const RunnerProfileMode = z.enum(['local-docker', 'isolated-subprocess'])
+export const RunnerProfileMode = z.enum(['local-docker', 'isolated-subprocess', 'container-native'])
 export type RunnerProfileMode = z.infer<typeof RunnerProfileMode>
 
 /** profile 的资源 limits（与 ExecutionPlan ExecutionLimits 默认值一致：行为不变约束）。 */
@@ -66,15 +66,19 @@ export const RunnerProfile = z.object({
   runner_mode: RunnerProfileMode,
   /** 锁内 image digest（configs/runner-profiles/images.lock.json；RUN-02）。 */
   image: z.string().regex(PROFILE_IMAGE_DIGEST_RE, 'profile image must be <image>@sha256:<64 hex>'),
-  /** 当前唯一合法网络策略（security-baseline.md §5：host 网络在 floor 层拒绝）。 */
-  network_policy: z.literal('none'),
+  /** Docker/fixture use none; native can inherit or request an isolated namespace. */
+  network_policy: z.enum(['none', 'inherited']),
   limits: RunnerProfileLimits,
   /** capability 标签（如 `cpu-only` / `gpu-requested` / `trusted-smoke-fixture-only`）。 */
   capabilities: z.array(z.string()).default([]),
   /** profile 记录本身的 sha256 pin（kernel submitJob 固定进 Job，runner 复算校验）。 */
   config_hash: z.string().regex(PROFILE_CONFIG_HASH_RE, 'config_hash must be sha256:<64 hex>'),
   enabled: z.boolean().default(true),
-}).strict()
+}).strict().superRefine((profile, ctx) => {
+  if (profile.network_policy === 'inherited' && profile.runner_mode !== 'container-native') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['network_policy'], message: 'inherited network requires container-native' })
+  }
+})
 export type RunnerProfile = z.infer<typeof RunnerProfile>
 
 /** 稳定 opaque profile ids（内置注册表的主键）。 */
@@ -82,6 +86,14 @@ export const RUNNER_PROFILE_IDS = {
   localDockerCpu: 'profile_local_docker_cpu_v1',
   localDockerGpu: 'profile_local_docker_gpu_v1',
   isolatedSubprocess: 'profile_isolated_subprocess_v1',
+  containerNativeCpu: 'profile_container_native_cpu_v1',
+  containerNativeGpu: 'profile_container_native_gpu_v1',
+  containerNativeCpuResources: 'profile_container_native_cpu_resources_v1',
+  containerNativeGpuResources: 'profile_container_native_gpu_resources_v1',
+  containerNativeCpuOffline: 'profile_container_native_cpu_offline_v1',
+  containerNativeGpuOffline: 'profile_container_native_gpu_offline_v1',
+  containerNativeCpuIsolated: 'profile_container_native_cpu_isolated_v1',
+  containerNativeGpuIsolated: 'profile_container_native_gpu_isolated_v1',
 } as const
 export type RunnerProfileId = (typeof RUNNER_PROFILE_IDS)[keyof typeof RUNNER_PROFILE_IDS]
 
@@ -179,6 +191,26 @@ function defineProfile(record: Omit<RunnerProfile, 'config_hash'>): RunnerProfil
  *   ExecutionTarget；secure kinds 由 kernel 422 拒绝）。
  */
 export const BUILTIN_RUNNER_PROFILES: readonly RunnerProfile[] = [
+  ...(['cpu', 'gpu'] as const).flatMap(compute => (['resources', 'offline', 'isolated'] as const).map(isolation => defineProfile({
+    profile_id: `profile_container_native_${compute}_${isolation}_v1`,
+    display_name: `Current Research Container (${compute.toUpperCase()}, ${isolation})`,
+    runner_mode: 'container-native',
+    image: RUNNER_PROFILES_IMAGES_LOCK.node_fixture,
+    network_policy: isolation === 'resources' ? 'inherited' : 'none',
+    limits: { memory_mb: 1024, cpus: 1, pids: 256 },
+    capabilities: ['container-native', ...(compute === 'gpu' ? ['nvidia', 'gpu'] : ['cpu']), ...(isolation === 'offline' ? [] : ['native-cgroup-v2'])],
+    enabled: true,
+  }))),
+  ...(['cpu', 'gpu'] as const).map(compute => defineProfile({
+    profile_id: compute === 'cpu' ? RUNNER_PROFILE_IDS.containerNativeCpu : RUNNER_PROFILE_IDS.containerNativeGpu,
+    display_name: `Current Research Container (${compute.toUpperCase()})`,
+    runner_mode: 'container-native',
+    image: RUNNER_PROFILES_IMAGES_LOCK.node_fixture,
+    network_policy: 'inherited',
+    limits: { memory_mb: 1024, cpus: 1, pids: 256 },
+    capabilities: ['container-native', ...(compute === 'gpu' ? ['nvidia', 'gpu'] : ['cpu'])],
+    enabled: true,
+  })),
   defineProfile({
     profile_id: RUNNER_PROFILE_IDS.localDockerCpu,
     display_name: 'Local Docker (CPU)',
@@ -245,5 +277,5 @@ export function resolveRunnerProfile(ref: string): RunnerProfile {
 
 /** 容器 profile（local-docker 路径）判定——secure kinds 必须为 true。 */
 export function isContainerRunnerProfile(profile: RunnerProfile): boolean {
-  return profile.runner_mode === 'local-docker'
+  return profile.runner_mode === 'local-docker' || profile.runner_mode === 'container-native'
 }

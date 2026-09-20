@@ -2,6 +2,12 @@
 
 > 规范性文档。SQLite 是桌面默认 adapter；表结构可以扩展，但以下不变量不可改变。
 
+## Container Native 升级（0039）
+
+`0039_container_native_targets` 将 `SCHEMA_VERSION` 从 35 提升到 36。事务中重建 `runner_targets` 的 kind CHECK，允许 `container-native`；逐字段迁移旧 target、revision、connection、runtime、identity、health 与时间戳，并重建 `idx_runner_targets_schedulable`。新增 nullable `native_compute_json`（配置 pin）与 `native_observation_json`（认证 heartbeat 观测，不参与配置 hash）。旧 target 的 hash 输入保持不变。
+
+迁移以 `INSERT OR IGNORE` 创建默认禁用的 `target_container_native_v1`，不修改旧 local-process/local-docker/remote-ssh。迁移正文生成 SHA-256 写入原有 `schema_migrations.checksum`，旧 migration body/checksum 不变；重复打开数据库不重复插入。升级前沿用现有备份流程，不支持自动降级。测试覆盖真实旧 CHECK 表、全部旧字段、外键、旧 checksum、kind 约束及重复打开。
+
 ## 1. 文件布局
 
 ~~~text

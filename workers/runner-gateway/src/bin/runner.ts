@@ -35,6 +35,8 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { ResearchClient } from '@dsh-scholar/research-client'
+import { collectNativeEnvironment } from '../container-native-environment.js'
+import { RUNNER_PROFILES_IMAGES_LOCK } from '@dsh-scholar/research-schemas'
 import {
   cancelRun,
   createFleetServer,
@@ -321,7 +323,7 @@ console.error(`[runner-gateway] ${owner} polling ${endpoint} (mode=${mode}, poll
 const configuredLocalTargetId = (cli['runner.fleet_target_id'] as string | undefined)?.trim()
 const localTargetId = configuredLocalTargetId !== undefined && configuredLocalTargetId !== ''
   ? configuredLocalTargetId
-  : mode === 'docker' ? 'target_local_docker_v1' : 'target_local_process_v1'
+  : mode === 'container-native' ? 'target_container_native_v1' : mode === 'docker' ? 'target_local_docker_v1' : 'target_local_process_v1'
 
 // The shared service token gates internal routes, while this independent
 // target token proves that this runner is allowlisted for localTargetId. A
@@ -331,7 +333,13 @@ let nextTargetHeartbeatAt = 0
 async function heartbeatLocalTarget(): Promise<void> {
   if (runnerTargetToken === undefined || runnerTargetToken === '' || Date.now() < nextTargetHeartbeatAt) return
   const target = await client.getRunnerTarget(localTargetId)
-  await client.heartbeatRunnerTarget(localTargetId, { expected_revision: target.revision, health: 'online' })
+  const observation = mode === 'container-native'
+    ? await collectNativeEnvironment(process.cwd(), target.native_compute ?? { mode: 'cpu' }, RUNNER_PROFILES_IMAGES_LOCK.node_fixture)
+    : undefined
+  await client.heartbeatRunnerTarget(localTargetId, {
+    expected_revision: target.revision, health: 'online',
+    ...(observation === undefined ? {} : { native_observation: observation.fingerprint }),
+  })
   nextTargetHeartbeatAt = Date.now() + Math.max(10_000, Math.min(heartbeatMs, 30_000))
 }
 
@@ -358,7 +366,7 @@ while (!stopping) {
     })
     // Recover stale leases on every cycle (self-healing after crashes, §9.3).
     await client.recoverExpiredLeases().catch(() => undefined)
-    const localTargetKind = mode === 'docker' ? 'local-docker' : 'local-process'
+    const localTargetKind = mode === 'container-native' ? 'container-native' : mode === 'docker' ? 'local-docker' : 'local-process'
     const jobs = await client.claimJobs(owner, 1, 300, {
       runner_target_kinds: [localTargetKind],
       runner_target_ids: [localTargetId],

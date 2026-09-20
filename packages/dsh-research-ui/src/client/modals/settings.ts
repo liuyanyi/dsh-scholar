@@ -471,7 +471,7 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
     const kindSelect = (value: RunnerTargetKindLite): HTMLSelectElement => {
       const select = document.createElement('select')
       select.className = 'field-input'
-      for (const kind of ['local-process', 'local-docker', 'remote-ssh'] as const) {
+      for (const kind of ['local-process', 'local-docker', 'container-native', 'remote-ssh'] as const) {
         const option = document.createElement('option')
         option.value = kind
         option.textContent = t('shell', `shell.settings.targets.kind.${kind}`)
@@ -535,7 +535,7 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
       const name = textInput(target?.display_name ?? '', t('shell', 'shell.settings.targets.namePlaceholder'))
       const kind = kindSelect(target?.kind ?? 'local-docker')
       const caps = textInput(target?.capabilities.join(', ') ?? '', t('shell', 'shell.settings.targets.capabilitiesPlaceholder'))
-      const runtimeDraft = runnerTargetRuntimeDraft(target?.runtime)
+      const runtimeDraft = runnerTargetRuntimeDraft(target?.native_compute === undefined ? target?.runtime : { image_digest: '', compute: target.native_compute })
       const image = textInput(runtimeDraft.imageDigest || DEFAULT_DOCKER_IMAGE_DIGEST, t('shell', 'shell.settings.targets.image'))
       const compute = document.createElement('select')
       compute.className = 'field-input'
@@ -557,9 +557,10 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
         return wrapper
       }
       const deviceField = labeled('shell.settings.targets.devices', devices, 'shell.settings.targets.devicesHint')
+      const imageField = labeled('shell.settings.targets.image', image, 'shell.settings.targets.imageHint')
       runtimeFields.append(
         el('div', 'settings-row-label', t('shell', 'shell.settings.targets.runtime')),
-        labeled('shell.settings.targets.image', image, 'shell.settings.targets.imageHint'),
+        imageField,
         labeled('shell.settings.targets.compute', compute),
         deviceField,
       )
@@ -586,6 +587,7 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
       )
       const refreshConditionalFields = (): void => {
         const localProcess = kind.value === 'local-process'
+        imageField.style.display = kind.value === 'container-native' ? 'none' : 'flex'
         runtimeFields.style.display = localProcess ? 'none' : 'grid'
         remoteFields.style.display = kind.value === 'remote-ssh' ? 'grid' : 'none'
         deviceField.style.display = !localProcess && compute.value === 'nvidia' ? 'flex' : 'none'
@@ -643,6 +645,7 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
           draining: draining.checked,
           capabilities: caps.value.split(',').map(value => value.trim()).filter(Boolean),
           service_identity: serviceIdentityPayload,
+          ...(runtimeResult.native_compute !== undefined ? { native_compute: runtimeResult.native_compute } : target?.native_compute === undefined ? {} : { native_compute: null }),
           ...(runtimeResult.runtime !== undefined
             ? { runtime: runtimeResult.runtime }
             : { ...(target?.runtime !== undefined ? { runtime: null } : {}) }),
@@ -655,6 +658,7 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
               target_id: id.value.trim(), display_name: shared.display_name, kind: shared.kind,
               enabled: shared.enabled, draining: shared.draining, capabilities: shared.capabilities,
               service_identity: shared.service_identity,
+              ...(runtimeResult.native_compute === undefined ? {} : { native_compute: runtimeResult.native_compute }),
               ...(runtimeResult.runtime === undefined ? {} : { runtime: runtimeResult.runtime }),
               ...(connection === undefined ? {} : { connection }),
             },
@@ -707,6 +711,14 @@ export async function openSettingsModal(root: ShadowRoot | null | undefined, foc
       title.append(identity, status)
       const meta = el('div', 'muted', target.capabilities.length > 0 ? target.capabilities.join(' · ') : '—')
       meta.style.cssText = 'font-size:10px'
+      if (target.kind === 'container-native') {
+        meta.style.overflowWrap = 'anywhere'
+        meta.appendChild(el('div', '', t('shell', 'shell.settings.targets.nativeNetwork')))
+        const observation = target.native_observation
+        if (observation !== undefined) meta.appendChild(el('div', '',
+          `${observation.os}/${observation.arch} · Node ${observation.node_version} · ${observation.python_version ?? 'Python unknown'} · CUDA ${observation.cuda_version ?? 'unknown'} · GPU ${observation.gpu_devices.map(device => device.index).join(',') || 'none'} · ${observation.container_image_identity ?? 'image unknown'}`))
+        if (activeProject?.execution.runner_target_id === target.target_id) meta.appendChild(el('div', 'mono', activeProject.execution.runner_profile_id ?? ''))
+      }
       if (target.connection !== undefined) {
         const available = [target.connection.endpoint, target.connection.credential, target.connection.known_hosts].every(ref => ref.available)
         meta.appendChild(document.createTextNode(` · ${t('shell', available ? 'shell.settings.targets.secretsAvailable' : 'shell.settings.targets.secretsUnavailable')}`))
