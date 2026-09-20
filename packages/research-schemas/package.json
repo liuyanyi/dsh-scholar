@@ -17,6 +17,11 @@
       "import": "./lib/chat-agent.js",
       "default": "./lib/chat-agent.js"
     },
+    "./runner-environment": {
+      "types": "./lib/runner-environment.d.ts",
+      "import": "./lib/runner-environment.js",
+      "default": "./lib/runner-environment.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {

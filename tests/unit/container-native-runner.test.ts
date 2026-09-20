@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash, generateKeyPairSync, verify } from 'node:crypto'
-import { mkdtempSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readlinkSync, readdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ResearchClient } from '@dsh-scholar/research-client'
@@ -52,6 +52,36 @@ function harness(script: string, kind: JobRecord['kind'] = 'formal') {
 const metrics = `const fs = require('node:fs'); fs.writeFileSync(process.env.DSH_OUTPUTS_DIR + '/metrics.json', JSON.stringify({schema_version:1,run_id:process.env.DSH_RUN_ID,contract_id:process.env.DSH_CONTRACT_ID,seed:Number(process.env.DSH_SEED),metrics:[{name:'accuracy',value:0.9}]})); console.log('frozen-input');`
 
 describe('container-native actual CPU execution', () => {
+  it('executes with ordered UUIDs, keeps explicit all frozen, and fails if a queued UUID disappears (mock NVIDIA)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'native-mock-gpu-')); dirs.push(root)
+    const smi = join(root, 'nvidia-smi')
+    const rows = (text: string) => { writeFileSync(smi, `#!/bin/sh\nprintf '%s\\n' '${text}'\n`); chmodSync(smi, 0o755) }
+    rows('2, GPU-aaaa, 595.1\n5, GPU-bbbb, 595.1\n9, GPU-cccc, 595.1')
+    vi.stubEnv('PATH', `${root}:${process.env.PATH}`)
+    vi.stubEnv('CUDA_VISIBLE_DEVICES', '2,5,9')
+    vi.stubEnv('NVIDIA_VISIBLE_DEVICES', 'all')
+    const pin = (await collectNativeEnvironment(root, { mode: 'cpu' }, profile.image)).fingerprint.software_environment_hash
+    const gpuProfile = getRunnerProfile(RUNNER_PROFILE_IDS.containerNativeGpu)!
+    const setupGpu = (devices: 'all' | string[]) => {
+      const h = harness(`${metrics}; console.log('selected='+process.env.CUDA_VISIBLE_DEVICES)`)
+      Object.assign(h.job.payload, { runner_compute: { mode: 'nvidia', devices }, native_gpu_uuids: ['GPU-bbbb', 'GPU-aaaa'], runner_profile_id: gpuProfile.profile_id, profile_config_hash: gpuProfile.config_hash, native_environment_pin_version: 2, expected_environment_hash: pin })
+      return h
+    }
+    for (const devices of [['5', '2'], 'all'] as const) {
+      const h = setupGpu(devices === 'all' ? devices : [...devices])
+      const result = await h.run()
+      expect(result.job.status, result.job.error).toBe('succeeded')
+      expect(result.run.stdout).toContain('selected=GPU-bbbb,GPU-aaaa')
+      expect((result.job.run_manifest as any).execution_environment.fingerprint.selected_gpu_uuids).toEqual(['GPU-bbbb', 'GPU-aaaa'])
+      expect((result.job.run_manifest as any).resources.gpu).toBe(2)
+    }
+    const queued = setupGpu(['5', '2'])
+    rows('2, GPU-aaaa, 595.1\n5, GPU-dddd, 595.1')
+    const result = await queued.run()
+    expect(result.job.status).not.toBe('succeeded')
+    expect(result.run.error).toContain('native_gpu_unavailable')
+    expect(result.run.stdout).not.toContain('selected=')
+  })
   it.skipIf(process.env.DSH_TEST_NATIVE_ISOLATION !== '1')('enforces real delegated cgroup and network namespace, then removes the group', async () => {
     const parentNetwork = readlinkSync('/proc/self/ns/net')
     const before = readdirSync(process.env.DSH_NATIVE_CGROUP_ROOT!).filter(name => name.startsWith('dsh-')).sort()

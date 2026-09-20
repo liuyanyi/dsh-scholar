@@ -1256,6 +1256,7 @@ export class ResearchClient {
   // ── jobs ─────────────────────────────────────────────────────────────────
 
   submitJob(input: {
+    compute?: import('@dsh-scholar/research-schemas').DockerCompute
     project_id: string
     idempotency_key: string
     kind: string
@@ -1282,6 +1283,8 @@ export class ResearchClient {
    * through this method as well and never through generic Job submission.
    */
   startBaselineRun(input: {
+    compute?: import('@dsh-scholar/research-schemas').DockerCompute
+    runner_profile_id?: string | null
     project_id: string
     expected_revision: number
     idempotency_key: string

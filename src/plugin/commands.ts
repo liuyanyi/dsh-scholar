@@ -13,7 +13,7 @@ import type { ResearchClient } from '@dsh-scholar/research-client'
 import type { ConnectorCache } from '@dsh-scholar/scholar-connectors'
 import { multiSourceSearch } from '@dsh-scholar/scholar-connectors'
 import { selectedSkillNames } from './skills.js'
-import { paperRefFromToken } from '@dsh-scholar/research-schemas'
+import { paperRefFromToken, DockerCompute } from '@dsh-scholar/research-schemas'
 import { projectCreateIdempotencyKey } from './native-chat.js'
 
 export interface CommandContext {
@@ -314,6 +314,9 @@ export function registerResearchCommands(ctx: Context, commandCtx: CommandContex
             const job = await client.submitJob({
               project_id: project.project_id,
               idempotency_key: idem,
+              compute: data?.compute === undefined ? undefined : DockerCompute.parse(data.compute),
+              runner_target_id: typeof data?.runner_target_id === 'string' ? data.runner_target_id : undefined,
+              runner_profile_id: typeof data?.runner_profile_id === 'string' ? data.runner_profile_id : undefined,
               kind,
               command: Array.isArray(data?.command) ? data.command.map(String) : [],
               payload: { message: String(data?.message ?? `/run ${kind}`), ...(data ?? {}) },

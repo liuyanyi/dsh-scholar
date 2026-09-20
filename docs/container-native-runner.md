@@ -7,7 +7,7 @@
 1. 在长期科研容器安装项目所需 executable、Python/CUDA 依赖及 TeX 工具链。Runner 不安装依赖，也不启动 Docker。
 2. 在 Kernel 的 `secretRoot/runner-targets/target_container_native_v1.token` 配置目标身份令牌，文件权限为 `0600`。沿用现有 Kernel bearer、service token、Runner signing key 注册机制。
 3. 在 Scholar Settings 启用「当前科研容器」。内置 `target_container_native_v1` 默认禁用，不替换既有 Docker 默认目标。
-4. CPU 使用 `profile_container_native_cpu_v1`；GPU 使用 `profile_container_native_gpu_v1`，Target 需要 `nvidia` capability。`native_compute` 为 `{ "mode": "cpu" }` 或 `{ "mode": "nvidia", "devices": "all" }` / 数字设备 ID 数组。Settings 提供 CPU/NVIDIA 和设备选择，不接受任意 env、host path 或命令注入。
+4. CPU 使用 `profile_container_native_cpu_v1`；GPU 使用 `profile_container_native_gpu_v1`，Target 需要 `nvidia` capability。Target 描述执行环境与能力，每次提交通过顶层 `compute` 选择 CPU 或 GPU；Settings 中历史 `native_compute` 不再作为新任务的设备默认值。GPU 必须明确提供设备编号数组或显式 `all`。
 5. 启动 Runner，提供与现有部署相同的鉴权环境变量：
 
 ```sh
@@ -18,7 +18,27 @@ pnpm runner --mode container-native --target-id target_container_native_v1 --ker
 
 Project 选择该 Target 后默认绑定 CPU/GPU native profile；可以通过原有 `execution.runner_profile_id` 设置切换。native profile 只能绑定 native Target；Docker profile 仍只绑定 local-docker/remote-ssh；isolated-subprocess 仍只能用于 local-process trusted smoke。
 
-正式实验现已要求 V2 实际环境观测与 Contract 审批 pin。先在选定 Python 环境中启动 Runner、取得认证 heartbeat，再审批新的 Contract；旧审批不自动补 pin。漂移保护、GPU UUID 租约、路径兼容审计及其限制见 [环境 Pin 与 GPU 租约](container-native-drift-guard.md)。
+新正式实验要求 V3 环境观测与 V2 软件环境审批 pin。先在选定 Python 环境中启动 Runner、取得认证 heartbeat，再审批新的 Contract；旧审批不自动补 pin。漂移保护、GPU UUID 租约、路径兼容审计及其限制见 [环境 Pin 与 GPU 租约](container-native-drift-guard.md)。
+
+## 每次运行选卡
+
+浏览器提交 `/run` 或完整 `/reproduce` 请求时，native Target 会弹出「本次运行使用的 GPU」。支持 CPU、指定单卡、多卡；按勾选顺序建立 CUDA 逻辑编号，`all` 不默认选中。界面显示设备观测时间；「可见」不代表空闲或独占。CPU/GPU 切换保留 resources/offline/isolated 隔离等级，不会降级为普通 Profile。Run 详情显示请求 compute、固定 UUID 与签名的实际 CUDA 映射。
+
+正式 HTTP Job 接口 `POST /v1/projects/{id}/jobs` 示例（其余 Contract、Snapshot、image pin 等必填字段仍按原规则提供）：
+
+```json
+{
+  "kind": "pilot",
+  "idempotency_key": "pilot-seed11-gpu5-2",
+  "runner_target_id": "target_container_native_v1",
+  "runner_profile_id": "profile_container_native_gpu_v1",
+  "compute": { "mode": "nvidia", "devices": ["5", "2"] }
+}
+```
+
+baseline 使用原子入口 `POST /v1/projects/{id}/baseline-runs`，同样接受 `compute` 和 `runner_profile_id`。ResearchClient 的 `submitJob` / `startBaselineRun` 原样传递；Agent 的 `experiment_submit`、`baseline_prepare`、`test_run` 提供 `compute_json`（同一 compute schema）、`runner_target_id` 和 `runner_profile_id`。不接受通过内部 `payload.runner_compute` 指定设备。其他 Target 收到顶层 compute 会明确拒绝。
+
+同一 Target、同一份新语义审批的 Contract，分别以 `devices:["2"]`、`["5"]`、`["2","5"]` 和不同幂等键提交即可。编号是当前容器观测的设备编号，不是实验内 CUDA 逻辑编号。Kernel 在提交时按顺序解析 UUID；`["5","2"]` 的第一张对应 `cuda:0`。显式 `all` 在提交时固定全部允许设备，执行时不会扩展。自动重试保持原选择；换卡需提交新的 Job，不更新 Target revision/config hash、不清空 health，也不要求重启 Runner。
 
 ## 输入与输出
 
@@ -52,11 +72,11 @@ baseline/pilot/formal/reproduce 保持 approved Contract、冻结代码/数据�
 
 这些模式不是不可信代码的完整保密沙箱：容器其他可读文件仍可见，`/dev` 供 GPU 使用；独立 network namespace 不阻断通过文件系统路径访问的 Unix socket。凭据仍应放在实验用户不可读的位置。默认模式保持原有文件系统访问行为。
 
-GPU 启动前查询 `nvidia-smi`，验证当前可见设备与 typed selector；使用 `CUDA_VISIBLE_DEVICES` 限制实验可见设备，不使用 Docker `--gpus`，也不把该变量宣称为硬件隔离。无可用设备或指定设备不在父容器可见集合时，以 environment 类失败结束。
+GPU 启动前查询 `nvidia-smi`，核对已固定 UUID 仍在父容器和 Runner 启动环境允许的集合内，同时遵守 `NVIDIA_VISIBLE_DEVICES` 与 `CUDA_VISIBLE_DEVICES`。实验的 `CUDA_VISIBLE_DEVICES` 设置为有序 UUID，锁单独排序，不改变执行顺序。无设备、设备消失或范围收窄时以 environment 类失败结束，不自动换卡。不使用 Docker `--gpus`，也不把可见性变量宣称为硬件隔离。
 
 每次实际执行前采集版本化 fingerprint：OS/架构、Node/Python、CUDA toolkit/驱动、GPU ID、冻结依赖锁 hash、compute，以及实际网络/资源隔离状态。未知版本或镜像身份记录 `null`；不采集完整 env、无关宿主路径或 secret。部署可通过 `DSH_RESEARCH_CONTAINER_IMAGE=repository@sha256:...` 提供当前容器镜像身份，这是部署声明，Runner 不通过 Docker 验证。
 
-V2 额外记录 `actual_environment_hash`，引用实际解释器及 installed distributions 的环境 Snapshot Artifact；与 `dependency_lock_hash` 区分。baseline/pilot/formal/reproduce 的 `expected_environment_hash` 来自审批时固定的环境。GPU Job 还固定 UUID 集合，认领时互斥，启动时加本机 flock 锁。
+V3 保留 V2 的 `actual_environment_hash`，引用包含 GPU 观测的完整 Snapshot Artifact；新增 `software_environment_hash`，从版本化软件投影计算，不含 GPU UUID/编号/可见集合。新 Job 的 `native_environment_pin_version=2` 表明 `expected_environment_hash` 使用软件 pin。`selected_gpu_uuids` 是本次有序分配，纳入签名 fingerprint。GPU Job 认领时互斥，启动时加本机 flock 锁。普通 native 是 best-effort 隔离，无 cgroup/bubblewrap/namespace 权限仍可运行；明确选择严格 Profile 时能力不足继续失败。
 
 `ExecutionPlan.image.digest` 保留为配置 pin。native Manifest 的 `container_digest=configured:<digest>`，不会声称运行过该 digest 的子容器；`execution_environment` 包含配置 pin、fingerprint 与确定性 SHA-256。字段纳入原有 Ed25519 签名，Kernel 校验 fingerprint hash、image pin、compute、隔离模式及实际硬资源 limits。资源模式记录 `resource_isolation=cgroup-v2` 和 `enforced_limits`，断网记录 `network_isolation=network-namespace`；旧默认 fingerprint 仍合法。Logs/Metrics/PDF 等 Artifact 沿用现有注册与 Manifest 引用，Evidence/Claim 完成校验不变。Settings heartbeat 展示的是父容器环境观测，本次实验的权威 fingerprint 在签名 Manifest 中。
 

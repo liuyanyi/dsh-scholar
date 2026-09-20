@@ -8,6 +8,7 @@ import { retryableJobIds, runMatchesFilter, runTimeoutSeconds, runsEmptyStateMod
 import { nextActionCardModel } from '../next-action-cards'
 import { runChatLine } from '../modals/commands'
 import { openSettingsModal } from '../modals/settings'
+import { runGpuMapping } from '../run-compute-model'
 export let runsSelecting = false
 export let runsSelected = new Set<string>()
 /** Runs status filter (dsh-web filter chips). */
@@ -354,6 +355,9 @@ export async function openJobDetailModal(root: ShadowRoot, jobId: string, projec
   row(t('runs', 'runs.detailJob'), `\`${String(job.job_id)}\``)
   row(t('runs', 'runs.detailKind'), String(job.kind ?? '—'))
   row(t('runs', 'runs.detailStatus'), String(job.status ?? '—'))
+  const payload = job.payload as { runner_compute?: unknown; native_gpu_uuids?: string[] } | undefined
+  if (payload?.runner_compute) row(t('runs', 'runs.compute.request'), JSON.stringify(payload.runner_compute))
+  if (payload?.native_gpu_uuids) row(t('runs', 'runs.compute.fixed'), runGpuMapping(payload.native_gpu_uuids))
   if (typeof job.contract_id === 'string' && job.contract_id !== '') row(t('runs', 'runs.detailContract'), job.contract_id)
   if (typeof job.failure_class === 'string' && job.failure_class !== '') row(t('runs', 'runs.detailFailure'), job.failure_class)
   if (typeof job.error === 'string' && job.error !== '') row(t('runs', 'runs.detailError'), job.error)
@@ -382,6 +386,9 @@ export async function openJobDetailModal(root: ShadowRoot, jobId: string, projec
   if (typeof manifest === 'object' && manifest !== null) {
     modal.appendChild(el('div', 'section-label', t('runs', 'runs.sectionManifest')))
     const m = manifest as Record<string, unknown>
+    const environment = m.execution_environment as { fingerprint?: { selected_gpu_uuids?: string[]; software_environment_hash?: string } } | undefined
+    if (environment?.fingerprint?.selected_gpu_uuids) row(t('runs', 'runs.compute.actual'), runGpuMapping(environment.fingerprint.selected_gpu_uuids))
+    if (environment?.fingerprint?.software_environment_hash) row(t('runs', 'runs.compute.software'), environment.fingerprint.software_environment_hash)
     if (typeof m.run_id === 'string') row(t('runs', 'runs.detailRun'), m.run_id)
     if (typeof m.exit_code === 'number') row(t('runs', 'runs.detailExitCode'), String(m.exit_code))
     if (typeof m.container_digest === 'string' && m.container_digest !== '') row(t('runs', 'runs.detailContainer'), m.container_digest)

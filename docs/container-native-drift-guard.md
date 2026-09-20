@@ -6,10 +6,13 @@
 
 采用 NativeEnvironmentSnapshot 作为 native 的实际环境身份。`ExecutionPlan.image.digest` 和 Manifest 的 `configured:<digest>` 保留兼容语义，不再把它们当作 native runtime 已匹配 OCI image 的证明。`DSH_RESEARCH_CONTAINER_IMAGE` 仍是可选部署声明，不能替代环境 pin。
 
-Fingerprint V2 区分两类事实：
+Fingerprint V3 在保留历史 V1/V2 校验的基础上区分三类事实：
 
 - `dependency_lock_hash`：冻结输入中的声明依赖文件 hash，沿用原字段。
 - `actual_environment_hash`：实际 NativeEnvironmentSnapshot 的确定性 SHA-256。
+- `software_environment_hash`：从 Snapshot 去掉 `gpu_uuids`，使用 `schema_version:2` 软件投影的确定性 SHA-256。OS、Node/Python executable、实际依赖 inventory、CUDA toolkit 和驱动仍参与匹配。
+
+完整 fingerprint 还包含可见设备编号、UUID、可观测型号、compute、隔离状态等事实；其 hash 不等于审批 pin。V3 的 `selected_gpu_uuids` 按执行顺序记录实际分配，数组下标就是实验内 CUDA 逻辑编号。GPU 编号、UUID、可见集合与占用情况不进入默认软件审批匹配条件。现有 Contract/Protocol 的其他约束及冻结 pins 继续校验，不自动改写硬件要求。
 
 Snapshot 包含 OS/架构、Node 版本及 executable 内容 hash、Python 版本及 executable 内容 hash、Python prefix 的 hash、实际 installed distributions、CUDA toolkit 版本、NVIDIA driver 版本和可见 GPU UUID 集合。Python inventory 通过所选解释器的 `importlib.metadata` 读取，包名归一化、排序，每项包含 name/version 和 installed RECORD 内容 hash。不导出 prefix 明文、完整 env、token 或 pip 配置。
 
@@ -17,21 +20,23 @@ Runner 的 PATH 决定目标默认 Python 环境；应先激活所选 uv venv �
 
 ## 审批与执行
 
-1. Target 的认证 heartbeat 上报 V2 `actual_environment_hash`。
-2. Contract Gate 审批时，Kernel 要求新鲜观测，并固定 `approval.native_environment={target_id,sha256}`。审批后不可变。
-3. baseline/pilot/formal/reproduce 提交必须匹配该批准 Target 和环境；变更返回 `environment_changed`。旧的已批准 Contract 若没有 native pin，不自动补写，必须使用新版本重新审批。
+1. Target 的认证 heartbeat 上报 V3 完整观测 hash 和软件 hash；采集不受 Target 历史默认设备选择限制。
+2. Contract Gate 审批时，Kernel 要求新鲜 V3 观测，并固定 `approval.native_environment={schema_version:2,target_id,sha256}`，其中 sha256 为软件 hash。审批后不可变。
+3. baseline/pilot/formal/reproduce 提交必须匹配该批准 Target 和软件环境；软件变更返回 `environment_changed`。旧 Contract（无 pin 或旧完整环境 pin）需要一次新版本重新审批，不自动补写。此后软件、代码、数据、方案不变时换卡不再要求审批。
 4. Kernel 在 Job payload 和签名 ExecutionPlan 固定 `expected_environment_hash`。formal/confirmatory 的 Protocol `pins.environment` 使用该 hash；非 native 仍使用原 Target config hash。Target revision/config hash 继续单独固定并校验。
 5. 排队期间 heartbeat 已显示环境变化时，不再认领该旧 pin 的 Job；需要恢复批准的环境，或通过新的 Contract/Protocol 提交新 Job，旧任务不会自动重 pin。
 6. Runner 在启动前重新采集实际环境；隔离 preflight 后再核对，任何不一致在实验执行前以 environment 类失败结束。正常退出后再采集一次，检测到运行期间漂移也不能成功完成。
-7. Snapshot 以 `manifest` 类 Artifact 注册，规范化内容 hash 等于 `actual_environment_hash`。签名 RunManifest 引用 `native_environment_artifact`。Kernel 检查 Artifact 所属项目、内容与 hash、审批/Job pin、fingerprint 事实及 GPU UUID 一致。
+7. Snapshot 以 `manifest` 类 Artifact 注册，规范化内容 hash 仍等于 `actual_environment_hash`。签名 RunManifest 引用 `native_environment_artifact`。Kernel 校验完整 Artifact，再重算软件投影与审批/Job pin 比较，并独立检查 fingerprint 事实及有序 GPU 分配。历史 Artifact、Manifest、审批记录不重写；无新版本标记的旧 Job 保留原完整 hash 与旧设备校验，不重新解析 Target 默认设备。
 
 Settings 显示最新实际环境 hash；heartbeat 是观测，Contract 中的审批 pin 才是任务预期，不会被后续 heartbeat 覆盖。TeX 当前保持原有流程，本阶段不要求它具备 Contract native pin。
+
+提交时设备编号、UUID、可观测型号以 `native_gpu_devices` 固定到 Job/ExecutionPlan；签名 fingerprint 的 `requested_gpu_devices` 保留这份记录，`gpu_devices` 记录执行时完整可见清单，`selected_gpu_uuids` 保留实际 CUDA 顺序。Manifest 的 `resources.gpu` 使用本次固定设备数量（包括显式 all），不把 all 简记为一张卡。
 
 ## GPU 排他与恢复
 
 此前 CLI 每次只认领一个 Job，但多个 Runner 实例仍可竞争同一设备；已有 Job 租约本身不提供 GPU 级排他。本阶段增加两层控制：
 
-- Kernel 在提交时把 selector 解析为观测到的 UUID，写入 `native_gpu_uuids`；`all` 预留全部可见设备。在现有 `BEGIN IMMEDIATE` 事务中，只有与全部 running native Job 的 GPU UUID 不相交时才认领。多个 Kernel 连接使用同一数据库时仍互斥；不同 Target 别名也按 UUID 冲突。资源所有权复用 durable Job owner/generation/token，不增加第二套租约状态。
+- Kernel 在提交时把本次顶层 compute selector 按用户顺序解析为观测 UUID，写入 `native_gpu_uuids`；GPU 未选设备时拒绝，显式 `all` 固定提交时全部允许设备。Target 不因选卡改变。在现有 `BEGIN IMMEDIATE` 事务中，只有与全部 running native Job 的 GPU UUID 不相交时才认领。多个 Kernel 连接使用同一数据库时仍互斥；不同 Target 别名也按 UUID 冲突。资源所有权复用 durable Job owner/generation/token，不增加第二套租约状态。重试沿用原 UUID，换卡必须提交新 Job。
 - Runner 使用 `/usr/bin/flock` 对 UUID 文件加排他锁，锁由沙箱外父进程持有直到实验退出。同一主机的 Runner 必须使用同一个锁目录：默认 `/tmp/dsh-native-gpu-locks`，可通过服务环境 `DSH_NATIVE_GPU_LOCK_ROOT` 指定绝对路径；不同容器共享设备时应挂载同一个锁目录。目录必须属于服务用户、不可被其他用户写入，服务用户应一致。不要删除仍被使用的锁文件，也不要为每个 Target 配置互不相同的目录。
 
 完成和取消释放数据库调度容量；过期 Job 沿用 `recoverExpiredLeases` 恢复并递增下一次 attempt 的 generation。旧进程仍占卡时 flock 拒绝新实验（`native_gpu_busy`），不会因数据库租约已恢复就重叠执行。native 续租被 fencing 拒绝或本地 deadline 到期时终止进程；另用 `/usr/bin/timeout` 给 GPU 进程树加独立期限，使 Runner 被 SIGKILL 后的遗留工作仍有时间上限。默认超时精度为秒级，正常运行继续受原有毫秒级 Runner timeout 约束。
@@ -42,7 +47,7 @@ Settings 显示最新实际环境 hash；heartbeat 是观测，Contract 中的�
 
 本阶段是审批绑定和 drift guard，不是完整不可变 runtime filesystem：
 
-- 可以发现标准安装/升级造成的 distribution version 或 RECORD 变化、解释器或 venv 切换、Node binary、CUDA/driver/GPU 集合变化。
+- 软件 pin 可以发现标准安装/升级造成的 distribution version 或 RECORD 变化、解释器或 venv 切换、Node binary、CUDA/driver 变化；GPU 集合变化仅保留在完整观测中，不导致默认软件审批漂移。
 - 不逐字节重算全部 site-packages；手工修改包文件但不改 metadata/RECORD、editable source 变化可能无法检测。
 - 不冻结所有 Node package、系统动态库、外部 executable、字体、数据服务或通过脚本自行选择的另一套 runtime。
 - 启动前/结束后两次核对不能排除期间发生又恢复的瞬时修改；inherited 网络也不能保证所有外部输入已冻结。
@@ -78,4 +83,4 @@ DSH_TEST_DRIFT_PYTHON=/tmp/dsh-native-drift-venv/bin/python pnpm exec vitest run
 
 没有新增 SQL migration：沿用 `0039` / schema version 36，Contract body、Job payload、Target observation 与 Artifact 均使用现有持久化结构。旧 Docker/SSH 数据和历史 migration checksum 不改写。
 
-最终回归：完整构建、UI typecheck、文档检查通过；主套件 164 个文件、1869 项通过、1 项硬隔离实测跳过，另以非 root 用户通过 10 项权限敏感测试。主套件显式开启真实 GPU 与真实 uv 漂移用例。Manifest 11 项、Contract/Protocol 绑定 12 项、Evidence 13 项、fencing 15 项、Target 身份 5 项安全回归全部通过，共 56 项。
+`4521714` 基线回归：完整构建、UI typecheck、文档检查通过；主套件 164 个文件、1869 项通过、1 项硬隔离实测跳过，另以非 root 用户通过 10 项权限敏感测试。当时显式开启真实 GPU 与真实 uv 漂移用例。Manifest 11 项、Contract/Protocol 绑定 12 项、Evidence 13 项、fencing 15 项、Target 身份 5 项安全回归全部通过，共 56 项。本轮逐次选卡的独立结果及未执行项目见 [验收记录](container-native-validation.md)，不能用此前真实 GPU 结果代替本轮多卡验收。

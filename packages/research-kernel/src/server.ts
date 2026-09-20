@@ -14,7 +14,7 @@ import { BUILTIN_RUNNER_PROFILES } from '@dsh-scholar/research-schemas'
 import { TexError } from './tex-workspace.js'
 import { PtyError } from './pty-session.js'
 import { PtyContextError, type PtyResolvedContext } from './pty-context.js'
-import { ContainerNativeFingerprint } from '@dsh-scholar/research-schemas'
+import { ContainerNativeFingerprint, DockerCompute } from '@dsh-scholar/research-schemas'
 import { WorkspaceError } from './workspace-store.js'
 import { PtyOpenRequest, PtyControlRequest, PtyAttachRequest, PtyDetachRequest, PtyCloseRequest, HumanPrincipal, NoveltyAudit, ObservedPhase, WorkspaceWriteRequest, WorkspaceMoveRequest, generateJsonSchema, randomId, ReproductionReportInput, OcrRequestCreateInput, IdeaDraft, runnerTargetConfigHash, ConfigWriteScopeSchema, SettingsWriteTransactionInput, type PtySession } from '@dsh-scholar/research-schemas'
 import {
@@ -338,6 +338,7 @@ const contractSchema = z.object({
 })
 
 const jobSchema = z.object({
+  compute: DockerCompute.optional(),
   project_id: z.string().min(1).optional(),
   idempotency_key: z.string().min(1),
   kind: z.enum(['echo', 'smoke', 'baseline', 'pilot', 'formal', 'analysis', 'reproduce']),
@@ -374,6 +375,8 @@ function rejectBaselineOrdinarySubmit(kind: string): void {
 }
 
 const baselineRunSchema = z.object({
+  compute: DockerCompute.optional(),
+  runner_profile_id: z.string().min(1).nullable().optional(),
   expected_revision: z.number().int().nonnegative(),
   idempotency_key: z.string().min(1),
   contract_id: z.string().min(1),

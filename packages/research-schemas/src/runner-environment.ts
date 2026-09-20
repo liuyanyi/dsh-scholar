@@ -11,7 +11,6 @@ const NvidiaDeviceList = z.array(z.string().regex(/^(0|[1-9][0-9]*)$/))
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'NVIDIA device ids must be unique' })
     }
   })
-  .transform(devices => [...devices].sort((left, right) => Number(left) - Number(right)))
 
 export const DockerCompute = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('cpu') }).strict(),
@@ -24,7 +23,8 @@ export type DockerCompute = z.infer<typeof DockerCompute>
 
 export const DockerRuntime = z.object({
   image_digest: z.string().regex(DOCKER_IMAGE_DIGEST_RE, 'Docker image must be <repository>@sha256:<64 hex>'),
-  compute: DockerCompute,
+  compute: DockerCompute.transform(compute => compute.mode === 'nvidia' && compute.devices !== 'all'
+    ? { ...compute, devices: [...compute.devices].sort((a, b) => Number(a) - Number(b)) } : compute),
 }).strict()
 export type DockerRuntime = z.infer<typeof DockerRuntime>
 

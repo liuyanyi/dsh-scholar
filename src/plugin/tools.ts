@@ -12,6 +12,7 @@ import { KernelApiError, type ResearchClient } from '@dsh-scholar/research-clien
 import { protocolRevisionCanonicalHash } from '@dsh-scholar/research-kernel'
 import {
   KnowledgeActivationIntent,
+  DockerCompute,
   ProtocolRevision,
   ResearchSynthesis,
   ReviewFinding,
@@ -1217,7 +1218,7 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
   }, toolCtx))
 
   ctx.tools.register(researchTool({
-    name: 'baseline_prepare',
+      name: 'baseline_prepare',
     description: 'Atomically start an approved Contract baseline through the canonical baseline-runs endpoint. Requires the current Project revision, approved Contract, immutable CodeSnapshot, non-empty argv, idempotency key and configured Runner environment; an optional seed and project Data Artifact are fixed into the Job and signed RunManifest. The first run advances to BASELINE_REPRO, while additional matched-seed runs stay in that phase and must use the same Contract.',
     parameters: {
       project_id: OPT_STRING,
@@ -1229,6 +1230,8 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
       data_artifact_id: OPT_STRING,
       command_json: { type: 'string', required: true },
       runner_target_id: OPT_STRING,
+      runner_profile_id: OPT_STRING,
+      compute_json: { type: 'string', description: 'Container-native run compute: {"mode":"cpu"} or {"mode":"nvidia","devices":["5","2"]}. GPU selection is required; all must be explicit.' },
       image_digest: OPT_STRING,
       output_contract_json: OPT_STRING,
       protocol_pin_json: OPT_STRING,
@@ -1260,6 +1263,8 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
         ...(args.data_artifact_id !== undefined ? { data_artifact_ids: [args.data_artifact_id] } : {}),
         command: command as string[],
         ...(args.runner_target_id !== undefined ? { runner_target_id: args.runner_target_id } : {}),
+        runner_profile_id: args.runner_profile_id,
+        compute: args.compute_json === undefined ? undefined : DockerCompute.parse(JSON.parse(args.compute_json)),
         ...(args.image_digest !== undefined ? { image_digest: args.image_digest } : {}),
         ...(outputContract !== undefined
           ? { output_contract: { metrics: outputContract.metrics as string, logs: outputContract.logs as string } }
@@ -1277,6 +1282,9 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
       command_json: { type: 'string', required: true },
       idempotency_key: { type: 'string', required: true },
       kind: { type: 'string', enum: ['smoke', 'analysis'] },
+      runner_target_id: OPT_STRING,
+      runner_profile_id: OPT_STRING,
+      compute_json: OPT_STRING,
     },
     output: okSchema,
     execute: async (args, ctx_, sessionId) => {
@@ -1288,6 +1296,9 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
         project_id: projectId,
         idempotency_key: args.idempotency_key,
         kind: args.kind ?? 'smoke',
+        runner_target_id: args.runner_target_id,
+        runner_profile_id: args.runner_profile_id,
+        compute: args.compute_json === undefined ? undefined : DockerCompute.parse(JSON.parse(args.compute_json)),
         command,
         payload: { message: 'test_run', code_commit: '' },
       })
@@ -1405,6 +1416,11 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
       kind: { type: 'string', required: true, enum: ['echo', 'smoke', 'baseline', 'pilot', 'formal', 'analysis', 'reproduce'] },
       command_json: OPT_STRING,
       payload_json: OPT_STRING,
+      runner_target_id: OPT_STRING,
+      runner_profile_id: OPT_STRING,
+      compute_json: { type: 'string', description: 'Container-native run compute: {"mode":"cpu"} or {"mode":"nvidia","devices":["5","2"]}. No implicit all.' },
+      protocol_pin_json: OPT_STRING,
+      run_intent: { type: 'string', enum: ['exploratory', 'confirmatory'] },
       // §12.2 JobSpec binding (SCH-EXEC-002).
       code_snapshot_id: OPT_STRING,
       image_digest: OPT_STRING,
@@ -1427,6 +1443,9 @@ export function registerResearchTools(ctx: { tools: { register(tool: ReturnType<
         project_id: projectId,
         idempotency_key: args.idempotency_key,
         kind: args.kind,
+        runner_target_id: args.runner_target_id,
+        runner_profile_id: args.runner_profile_id,
+        compute: args.compute_json === undefined ? undefined : DockerCompute.parse(JSON.parse(args.compute_json)),
         command,
         payload,
         contract_id: args.contract_id ?? null,

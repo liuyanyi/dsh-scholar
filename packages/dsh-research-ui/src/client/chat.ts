@@ -3,6 +3,7 @@ import type { ScholarChatImage } from '@dsh-scholar/research-schemas/chat-agent'
 import { api, apiResult, authHeaders, base, ensureCsrfToken } from './api'
 import { getLocale, t } from './i18n/index'
 import { CHAT_COMMANDS } from './modals/commands'
+import { selectRunCompute } from './modals/run-compute'
 import { openCommandHistoryModal, openGlobalSearchModal, openSessionSearchModal } from './modals/search'
 import { CHAT_MAX, activeChatProjectId, chatClear, chatPersist, chatPush, chatPushToProjectSession, chatSessionArchive, chatSessionClose, chatSessionEnsure, chatSessionNew, chatSessionRename, chatSessionSelect, chatSessionsPersist, chatSyncActive, consumeChatQuoteForProjectSession, favCommands, historyPushToProject, state, tabSave } from './state'
 import { copyText, el, fmtId, focusChatComposerAtEnd, openContextMenu, pill, rootHost, showToast, statusLabel } from './ui'
@@ -744,6 +745,8 @@ export async function executeChatCommand(
       if (command.length === 0 || contractId === undefined || codeSnapshotId === undefined) {
         return t('shell', 'shell.chat.baseline.invalid')
       }
+      const computeSelection = await selectRunCompute(activeProjectId, json)
+      if (computeSelection === null) return t('runs', 'runs.compute.cancelled')
       const started = await apiResult<{
         project?: { status?: string }
         job?: { job_id?: string; status?: string }
@@ -751,6 +754,7 @@ export async function executeChatCommand(
         method: 'POST',
         body: JSON.stringify({
           expected_revision: projection.project.revision,
+          ...computeSelection,
           idempotency_key: String(json.idempotency_key ?? `baseline-${contractId}`),
           contract_id: contractId,
           code_snapshot_id: codeSnapshotId,
@@ -774,16 +778,24 @@ export async function executeChatCommand(
       // USAGE_GUIDE §6: `/run <kind> <json>` — the kind may be a
       // positional word before the JSON or the `kind` field of the JSON.
       const kind = chatRunKind(rest, json, 'echo')
+      const computeSelection = await selectRunCompute(activeProjectId, json)
+      if (computeSelection === null) return t('runs', 'runs.compute.cancelled')
       const job = await api<{ job_id?: string; status?: string }>(`/v1/projects/${encodeURIComponent(activeProjectId)}/jobs`, {
         method: 'POST',
         body: JSON.stringify({
           idempotency_key: String(json?.idempotency_key ?? `chat-${Date.now()}`),
+          ...computeSelection,
           kind,
           command: Array.isArray(json?.command) ? json.command.map(String) : [],
           payload: { message: `chat /run ${kind}`, ...(json ?? {}) },
           contract_id: typeof json?.contract_id === 'string' ? json.contract_id : null,
           code_snapshot_id: typeof json?.code_snapshot_id === 'string' ? json.code_snapshot_id : null,
           runner_target_id: chatRunnerTargetId(json),
+          image_digest: json?.image_digest,
+          data_artifact_ids: json?.data_artifact_ids,
+          output_contract: json?.output_contract,
+          protocol_pin: json?.protocol_pin,
+          run_intent: json?.run_intent,
         }),
       })
       if (job === null || job.job_id === undefined) return 'job submission failed'

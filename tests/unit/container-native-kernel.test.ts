@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { ResearchKernel, startKernelServer, assessRunnerEnvironment } from '@dsh-scholar/research-kernel'
 import { ResearchClient } from '@dsh-scholar/research-client'
 import { collectNativeEnvironment, executeJob, signManifest } from '@dsh-scholar/runner-gateway'
@@ -56,8 +57,8 @@ describe('native schema and readiness', () => {
 })
 
 describe('native Kernel to signed runner roundtrip', () => {
-  it.each([false, ...(process.env.DSH_TEST_GPU_PYTHON ? [true] : [])])('executes approved baseline with frozen code/data and signed HTTP manifest (GPU=%s)', async gpu => {
-    const { kernel, project, target, signingKey } = setup(gpu)
+  it.each([{ gpu: false, legacy: false }, { gpu: false, legacy: true }, ...(process.env.DSH_TEST_GPU_PYTHON ? [{ gpu: true, legacy: false }] : [])])('executes approved baseline with frozen code/data and signed HTTP manifest (%j)', async ({ gpu, legacy }) => {
+    const { kernel, project, target, signingKey, root } = setup(gpu)
     const selectedProfile = getRunnerProfile(gpu ? RUNNER_PROFILE_IDS.containerNativeGpu : profile.profile_id)!
     const contract = kernel.registerContract({ project_id: project.project_id, idea_id: 'idea_native', data: { dataset_id: 'd', version: 'v1' }, methods: { baseline: 'b', treatment: 'a' }, metrics: { primary: 'accuracy', secondary: [] }, seeds: [11], analysis: {}, ablations: [], stop_conditions: { max_gpu_hours: 1, min_completed_seeds: 1, stop_on_data_leakage: true } })
     kernel.approveContract(contract.contract_id, 'dec_native', 'pi')
@@ -68,17 +69,34 @@ describe('native Kernel to signed runner roundtrip', () => {
     const locks = gpu ? { 'requirements.txt': { sha256: sha(requirements), content_base64: Buffer.from(requirements).toString('base64') } } : {}
     const code = kernel.registerArtifact({ project_id: project.project_id, kind: 'code', content: JSON.stringify({ schema_version: 1, files: { [filename]: { sha256: sha(source), content_base64: Buffer.from(source).toString('base64') }, ...locks } }) })
     const data = kernel.registerArtifact({ project_id: project.project_id, kind: 'data', content: 'frozen dataset' })
-    const job = kernel.submitJob({ project_id: project.project_id, kind: 'baseline', idempotency_key: 'native-baseline', contract_id: contract.contract_id, code_snapshot_id: code.artifact_id, image_digest: profile.image, data_artifact_ids: [data.artifact_id], command: [gpu ? process.env.DSH_TEST_GPU_PYTHON! : process.execPath, filename], payload: { seed: 11, output_contract: { metrics: '/outputs/metrics.json' } } })
+    const job = kernel.submitJob({ project_id: project.project_id, kind: 'baseline', idempotency_key: 'native-baseline', contract_id: contract.contract_id, code_snapshot_id: code.artifact_id, image_digest: profile.image, data_artifact_ids: [data.artifact_id], command: [gpu ? process.env.DSH_TEST_GPU_PYTHON! : process.execPath, filename], payload: { seed: 11, output_contract: { metrics: '/outputs/metrics.json' } }, compute: gpu ? { mode: 'nvidia', devices: [process.env.DSH_TEST_GPU_DEVICE ?? '0'] } : { mode: 'cpu' } })
     expect(job.payload).toMatchObject({ runner_target_kind: 'container-native', runner_target_revision: target.revision, runner_target_hash: runnerTargetConfigHash(target), profile_config_hash: selectedProfile.config_hash })
+    if (legacy) {
+      // Reconstruct a pre-upgrade persisted Job; its full environment pin remains authoritative.
+      delete job.payload.native_environment_pin_version
+      job.payload.expected_environment_hash = observation.actual_environment_hash
+      const db = new DatabaseSync(join(root, 'kernel.db'))
+      try { db.prepare('UPDATE jobs SET payload = ? WHERE job_id = ?').run(JSON.stringify(job.payload), job.job_id) } finally { db.close() }
+    }
     const [claimed] = kernel.claimJobs('native-owner', 300, 1)
     const client = await clientFor(kernel)
     const complete = client.completeJob.bind(client)
     vi.spyOn(client, 'completeJob').mockImplementation(async input => {
+      if (legacy) {
+        const { signature, payload_sha256, runner_key_id, ...old } = input.run_manifest as any
+        const { software_environment_hash, selected_gpu_uuids, requested_gpu_devices, ...facts } = old.execution_environment.fingerprint
+        const fingerprint = { ...facts, schema_version: 2 as const }
+        input = { ...input, run_manifest: signManifest({ ...old, execution_environment: { ...old.execution_environment, fingerprint, fingerprint_hash: containerNativeFingerprintHash(fingerprint) } }, signingKey) }
+      }
       const { signature, payload_sha256, runner_key_id, ...manifest } = input.run_manifest as Record<string, unknown>
       const environment = manifest.execution_environment as Record<string, unknown>
       await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, execution_environment: { ...environment, fingerprint_hash: `sha256:${'0'.repeat(64)}` } }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
       await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, container_digest: `docker:${profile.image}` }, signingKey) })).rejects.toMatchObject({ code: 'manifest_container_mismatch' })
       const original = (input.run_manifest as any).execution_environment
+      if (!legacy) await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, resources: { gpu: 99, gpu_mode: 'nvidia', gpu_devices: ['99'], cpu: 1, memory_gb: 1 } }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
+      for (const tampered of legacy ? [] : [{ ...original.fingerprint, selected_gpu_uuids: ['GPU-ffff'] }, { ...original.fingerprint, compute: { mode: 'nvidia' as const, devices: ['99'] } }, { ...original.fingerprint, software_environment_hash: `sha256:${'f'.repeat(64)}` }]) {
+        await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, execution_environment: { ...original, fingerprint: tampered, fingerprint_hash: containerNativeFingerprintHash(tampered) } }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
+      }
       const fingerprint = { ...original.fingerprint, network_isolation: 'network-namespace' as const }
       await expect(complete({ ...input, run_manifest: signManifest({ ...manifest, execution_environment: { ...original, fingerprint, fingerprint_hash: containerNativeFingerprintHash(fingerprint) } }, signingKey) })).rejects.toMatchObject({ code: 'manifest_environment_mismatch' })
       const alteredFacts = { ...original.fingerprint, os: 'different-os' }
@@ -90,7 +108,7 @@ describe('native Kernel to signed runner roundtrip', () => {
     expect(result.job.status, result.job.error).toBe('succeeded')
     if (gpu) {
       console.log('Native real GPU:', result.run.stdout)
-      expect(JSON.parse(result.run.stdout)).toMatchObject({ max_abs_error: 0, visible_devices: process.env.DSH_TEST_GPU_DEVICE ?? '0' })
+      expect(JSON.parse(result.run.stdout)).toMatchObject({ max_abs_error: 0, visible_devices: (job.payload.native_gpu_uuids as string[]).join(',') })
       expect((result.job.run_manifest as any).execution_environment.fingerprint.dependency_lock_hash).toMatch(/^sha256:/)
     }
     expect(kernel.getJob(job.job_id).run_manifest).toMatchObject({ code_snapshot_id: code.artifact_id, container_digest: `configured:${profile.image}`, execution_environment: { kind: 'container-native' }, signature: expect.any(String) })

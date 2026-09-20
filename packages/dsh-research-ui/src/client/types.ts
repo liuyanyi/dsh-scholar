@@ -204,6 +204,7 @@ export interface RunnerTargetSafeViewLite {
     gpu_devices: Array<{ index: string; uuid: string }>;
     container_image_identity: string | null;
     actual_environment_hash?: string;
+    software_environment_hash?: string;
   }
   service_identity?: SecretRefViewLite
   connection?: { endpoint: SecretRefViewLite; credential: SecretRefViewLite; known_hosts: SecretRefViewLite }

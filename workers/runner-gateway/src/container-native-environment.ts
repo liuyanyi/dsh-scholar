@@ -3,7 +3,7 @@ import { constants, accessSync, existsSync, readFileSync, statSync } from 'node:
 import { createHash } from 'node:crypto'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
-import { ContainerNativeFingerprint, containerNativeFingerprintHash, NativeEnvironmentSnapshot, nativeEnvironmentSnapshotHash, type ContainerNativeEnvironment, type DockerCompute } from '@dsh-scholar/research-schemas'
+import { ContainerNativeFingerprint, containerNativeFingerprintHash, NativeEnvironmentSnapshot, nativeEnvironmentSnapshotHash, nativeSoftwareEnvironmentHash, type ContainerNativeEnvironment, type DockerCompute } from '@dsh-scholar/research-schemas'
 
 const exec = promisify(execFile)
 const inheritedKeys = ['PATH', 'LANG', 'LC_ALL', 'TZ', 'VIRTUAL_ENV', 'CONDA_PREFIX', 'LD_LIBRARY_PATH', 'CUDA_HOME', 'CUDA_PATH', 'NVIDIA_VISIBLE_DEVICES', 'NVIDIA_DRIVER_CAPABILITIES'] as const
@@ -43,26 +43,31 @@ rows.sort(key=lambda r: (r['name'], r['version'], r['record_hash'] or ''))
 with open(sys.executable, 'rb') as f: executable = h(f.read())
 print(json.dumps({'version': sys.version.split()[0], 'executable_hash': executable, 'prefix_hash': h(sys.prefix.encode()), 'distributions': rows}))`
 
-export async function collectNativeEnvironment(cwd: string, compute: DockerCompute, image: string, source: NodeJS.ProcessEnv = process.env, runProbe: NativeProbe = probe, pythonCommand = 'python'): Promise<ContainerNativeEnvironment & { runtime_snapshot: NativeEnvironmentSnapshot }> {
+export async function collectNativeEnvironment(cwd: string, compute: DockerCompute, image: string, source: NodeJS.ProcessEnv = process.env, runProbe: NativeProbe = probe, pythonCommand = 'python', pinnedUuids?: string[]): Promise<ContainerNativeEnvironment & { runtime_snapshot: NativeEnvironmentSnapshot }> {
   const env = nativeEnvironment(cwd, compute, source)
   const python = await runProbe(pythonCommand, ['--version'], env)
   const inventory = await runProbe(pythonCommand, ['-I', '-c', pythonInventory], env)
   if (python !== null && inventory === null) throw new Error('environment: native_python_inventory_unavailable')
   const cuda = await runProbe('nvcc', ['--version'], env)
-  const nvidia = await runProbe('nvidia-smi', ['--query-gpu=index,uuid,driver_version', '--format=csv,noheader,nounits'], env)
-  const devices: Array<{ index: string; uuid: string }> = []
+  const nvidia = await runProbe('nvidia-smi', ['--query-gpu=index,uuid,driver_version,name', '--format=csv,noheader,nounits'], env)
+  const devices: Array<{ index: string; uuid: string; name?: string }> = []
   const drivers = new Set<string>()
   for (const line of nvidia?.split('\n') ?? []) {
-    const [index, uuid, driver] = line.split(',').map(s => s.trim())
+    const [index, uuid, driver, name] = line.split(',').map(s => s.trim())
     if (index !== undefined && /^\d+$/.test(index) && uuid !== undefined && /^GPU-[a-fA-F0-9-]+$/.test(uuid)) {
-      devices.push({ index, uuid })
+      devices.push({ index, uuid, ...(name ? { name } : {}) })
       if (driver !== undefined && /^[\d.]+$/.test(driver)) drivers.add(driver)
     }
   }
   devices.sort((a, b) => Number(a.index) - Number(b.index))
   const visible = source.CUDA_VISIBLE_DEVICES?.split(',').filter(Boolean)
-  const available = visible === undefined ? devices : devices.filter(d => visible.includes(d.index) || visible.includes(d.uuid))
-  if (compute.mode === 'nvidia' && (available.length === 0 || (compute.devices !== 'all' && compute.devices.some(id => !available.some(d => d.index === id))))) {
+  const parent = source.NVIDIA_VISIBLE_DEVICES
+  const parentIds = parent === undefined || parent === 'all' ? undefined : parent.split(',').filter(Boolean)
+  const available = devices.filter(d => (visible === undefined || visible.includes(d.index) || visible.includes(d.uuid))
+    && (parentIds === undefined || parentIds.includes(d.index) || parentIds.includes(d.uuid)))
+  if (compute.mode === 'nvidia' && (available.length === 0 || (pinnedUuids !== undefined
+    ? pinnedUuids.length === 0 || new Set(pinnedUuids).size !== pinnedUuids.length || pinnedUuids.some(uuid => !available.some(d => d.uuid === uuid))
+    : compute.devices !== 'all' && compute.devices.some(id => !available.some(d => d.index === id))))) {
     throw new Error('environment: native_gpu_unavailable')
   }
   const locks: Record<string, string> = {}
@@ -79,8 +84,9 @@ export async function collectNativeEnvironment(cwd: string, compute: DockerCompu
     gpu_uuids: available.map(d => d.uuid).sort(),
   })
   const fingerprint = ContainerNativeFingerprint.parse({
-    schema_version: 2, execution_kind: 'container-native', os: process.platform, arch: process.arch, node_version: process.version,
+    schema_version: 3, execution_kind: 'container-native', os: process.platform, arch: process.arch, node_version: process.version,
     actual_environment_hash: nativeEnvironmentSnapshotHash(runtime_snapshot),
+    software_environment_hash: nativeSoftwareEnvironmentHash(runtime_snapshot),
     python_version: runtime_snapshot.python === null ? null : `Python ${runtime_snapshot.python.version}`,
     cuda_version: cuda?.match(/release (\d+\.\d+)/)?.[1] ?? null,
     nvidia_driver_version: drivers.size ? [...drivers].sort().join(',') : null,

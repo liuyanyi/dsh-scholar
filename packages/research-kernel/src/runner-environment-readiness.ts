@@ -50,9 +50,8 @@ export function assessRunnerEnvironment(
     const seenMs = target.last_seen_at === null ? Number.NaN : Date.parse(target.last_seen_at)
     if (target.health !== 'online' || !Number.isFinite(seenMs) || nowMs - seenMs > RUNNER_TARGET_HEARTBEAT_TTL_MS) hard('target_unprobed')
     if ((profile.network_policy === 'inherited' && !target.capabilities.includes('network-inherited'))
-      || ((profile.capabilities.includes('gpu') || target.native_compute?.mode === 'nvidia') && !target.capabilities.includes('nvidia'))
-      || (!profile.capabilities.includes('gpu') && target.native_compute?.mode === 'nvidia')
-      || (profile.capabilities.includes('gpu') && target.native_compute?.mode === 'cpu')) hard('target_capability_mismatch')
+      || (profile.capabilities.includes('gpu') && !target.capabilities.includes('nvidia'))
+      || (!profile.capabilities.includes('gpu') && !target.capabilities.includes('cpu'))) hard('target_capability_mismatch')
   }
 
   if (target.kind === 'remote-ssh') {

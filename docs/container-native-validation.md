@@ -2,7 +2,37 @@
 
 日期：2026-09-20。使用 `research-base` 当前工作树；测试数据、SQLite 和 CAS 均为独立临时目录，不更改既有研究项目。TeX 和发布流程不属于本轮范围。
 
-## 真实 GPU：通过
+## 本轮逐次选卡与环境身份解耦
+
+基线 `4521714`，分支 `research-base`；没有回退已有提交。本轮没有人工指定并确认可用的真实 GPU，因此未执行真实 GPU 计算，也未自动遍历或占用共享设备。以下 GPU 行为使用 mock NVIDIA 观测和真实 CPU 子进程验证，不能当作真实 CUDA 多卡验收。
+
+已覆盖：同一 Target/Contract 分别选卡、显式 all 固定、CPU 不继承历史 GPU 默认值、顺序与 UUID 启动、父级可见范围、设备消失拒绝、GPU 锁冲突与独立设备、重试固定、baseline 原子接口与幂等冲突、软件 pin 不随 GPU 集合变化、实际依赖与驱动漂移、签名/设备/环境篡改拒绝、旧 Contract 不自动补 pin、旧 Job 与 V2 签名 Manifest 校验、ResearchClient/Agent 参数以及选卡 UI 模型。普通 native 的 CPU 执行不要求 namespace/cgroup 权限，严格 Profile 的失败行为保持不变。
+
+最终执行命令与结果：
+
+```sh
+pnpm run build
+pnpm --filter @dsh-scholar/research-ui typecheck
+pnpm run verify:docs
+pnpm exec vitest run --exclude tests/unit/chat-agent-bridge.test.ts
+runuser -u nobody -- /usr/bin/node node_modules/vitest/vitest.mjs run tests/unit/chat-agent-bridge.test.ts --no-cache --configLoader runner
+bash tests/security/run-manifest-tests.sh
+bash tests/security/run-formal-binding-tests.sh
+bash tests/security/run-fencing-tests.sh
+bash tests/security/run-runner-target-identity-tests.sh
+bash tests/security/run-evidence-tests.sh
+git diff --check
+```
+
+- 构建、UI 类型检查、23 份文档检查及补丁检查通过。
+- 主套件 165 个文件、1877 项通过、2 项跳过、0 失败；含 Docker/remote/local-process 既有单元回归。跳过真实硬隔离与独立 uv 安装升级用例。
+- 原有权限敏感套件在 root 下有一项无法模拟 chmod 拒绝；使用上列非 root 命令单独复验，10 项全部通过。合计单元测试 1887 项通过、2 项跳过。
+- 安全回归：Manifest 11、Contract/Protocol 12、fencing 15、Target 身份 5、Evidence 13，共 56 项通过、0 失败。
+- 本地临时数据目录的 standalone 服务启动并返回 HTTP 200；浏览器视觉/点击验收、真实 GPU 单卡/多卡顺序及真实严格隔离成功路径仍待人工验证。没有执行真实 Docker/SSH E2E。
+
+真实 GPU 后续验收须先人工确认两张可用设备，再按下面的 opt-in 测试命令替换编号。新运行应看到 `CUDA_VISIBLE_DEVICES=GPU-...`，不是数字；多卡核对 `cuda:0`/`cuda:1` 与提交顺序一致。不要将下面基线的 GPU 7 记录当作该设备当前空闲的保证。
+
+## 此前基线真实 GPU：通过
 
 独立 uv 环境：`/tmp/dsh-native-gpu-venv`，Python 3.12.3，PyTorch 2.7.1+cu128，CUDA wheel 12.8，NVIDIA 驱动 595.91.07。选择物理设备 7：NVIDIA RTX PRO 6000 Blackwell Server Edition，compute capability 12.0。没有修改系统 Python 或其他 GPU 任务。
 

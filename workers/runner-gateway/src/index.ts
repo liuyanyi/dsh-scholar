@@ -1066,14 +1066,24 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
             }
           }
           const observed = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest, process.env, undefined,
-            /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python')
+            /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python', nativePlan.native_environment_pin_version === 2 ? nativePlan.native_gpu_uuids : undefined)
           const { runtime_snapshot, ...environment } = observed
           nativeSnapshot = runtime_snapshot
           executionEnvironment = environment
-          if (nativePlan.expected_environment_hash !== undefined && nativePlan.expected_environment_hash !== environment.fingerprint.actual_environment_hash) throw new Error('environment_changed')
+          const environmentPin = (fingerprint: ContainerNativeEnvironment['fingerprint']) => nativePlan.native_environment_pin_version === 2 ? fingerprint.software_environment_hash : fingerprint.actual_environment_hash
+          if (nativePlan.expected_environment_hash !== undefined && nativePlan.expected_environment_hash !== environmentPin(environment.fingerprint)) throw new Error('environment_changed')
           const selectedGpuUuids = nativePlan.compute.mode === 'nvidia'
-            ? environment.fingerprint.gpu_devices.filter(d => nativePlan.compute.mode === 'nvidia' && (nativePlan.compute.devices === 'all' || nativePlan.compute.devices.includes(d.index))).map(d => d.uuid).sort() : []
+            ? nativePlan.native_environment_pin_version === 2 ? nativePlan.native_gpu_uuids ?? []
+              : environment.fingerprint.gpu_devices.filter(d => nativePlan.compute.mode === 'nvidia' && (nativePlan.compute.devices === 'all' || nativePlan.compute.devices.includes(d.index))).map(d => d.uuid).sort() : []
           if (nativePlan.compute.mode === 'nvidia' && JSON.stringify(selectedGpuUuids) !== JSON.stringify(nativePlan.native_gpu_uuids)) throw new Error('native_gpu_identity_changed')
+          // Legacy Jobs sorted UUIDs for locking, not for CUDA device order.
+          const executionGpuUuids = nativePlan.native_environment_pin_version === 2 || nativePlan.compute.mode === 'cpu'
+            ? selectedGpuUuids
+            : nativePlan.compute.devices === 'all' ? environment.fingerprint.gpu_devices.map(d => d.uuid)
+              : nativePlan.compute.devices.map(id => environment.fingerprint.gpu_devices.find(d => d.index === id)!.uuid)
+          env.CUDA_VISIBLE_DEVICES = executionGpuUuids.join(',')
+          executionEnvironment.fingerprint.selected_gpu_uuids = executionGpuUuids
+          executionEnvironment.fingerprint.requested_gpu_devices = nativePlan.native_gpu_devices ?? []
           const pinFailure = await runnerTargetPinFailure(client, targetPayload, 'container-native', configuredTargetId)
           if (pinFailure !== null) throw new Error(`environment: ${pinFailure}`)
           isolation = await prepareNativeIsolation(nativePlan, exec.cwd, env)
@@ -1083,8 +1093,8 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
           if (finalPinFailure !== null) throw new Error(`environment: ${finalPinFailure}`)
           if (nativePlan.expected_environment_hash !== undefined && (nativePlan.network.policy === 'none' || isolation.resource_isolation === 'cgroup-v2')) {
             const checked = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest, process.env, undefined,
-              /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python')
-            if (checked.fingerprint.actual_environment_hash !== nativePlan.expected_environment_hash) throw new Error('environment_changed')
+              /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python', nativePlan.native_environment_pin_version === 2 ? nativePlan.native_gpu_uuids : undefined)
+            if (environmentPin(checked.fingerprint) !== nativePlan.expected_environment_hash) throw new Error('environment_changed')
           }
           const gpuReadyPath = join(exec.cwd, `.dsh-gpu-${randomUUID()}`)
           const result = await spawnCaptured(nativeGpuLockedCommand(selectedGpuUuids, isolation.wrap([executable, ...exec.command.slice(1)]), nativePlan.limits.timeout_ms, gpuReadyPath), {
@@ -1097,8 +1107,8 @@ export async function executeJob(job: JobRecord, options: RunnerOptions): Promis
           rmSync(gpuReadyPath, { force: true })
           if (nativePlan.expected_environment_hash !== undefined && result.exitCode === 0) {
             const after = await collectNativeEnvironment(exec.cwd, nativePlan.compute, nativePlan.image.digest, process.env, undefined,
-              /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python')
-            if (after.fingerprint.actual_environment_hash !== nativePlan.expected_environment_hash) throw new Error('environment_changed_during_run')
+              /^python(?:\d+(?:\.\d+)*)?$/.test(basename(executable)) ? executable : 'python', nativePlan.native_environment_pin_version === 2 ? nativePlan.native_gpu_uuids : undefined)
+            if (environmentPin(after.fingerprint) !== nativePlan.expected_environment_hash) throw new Error('environment_changed_during_run')
           }
           return { run_id: exec.runId, exit_code: result.exitCode, started_at: started, finished_at: new Date().toISOString(), stdout: result.stdout, stderr: result.stderr, error: result.error, signal: result.signal }
         } catch (error) {

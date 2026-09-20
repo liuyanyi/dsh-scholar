@@ -13,7 +13,7 @@ import {
 import { join, relative, sep, dirname } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { ContainerNativeEnvironment, NativeEnvironmentSnapshot, nativeEnvironmentSnapshotHash, type ContainerNativeFingerprint } from '@dsh-scholar/research-schemas'
+import { DockerCompute, ContainerNativeEnvironment, NativeEnvironmentSnapshot, nativeEnvironmentSnapshotHash, nativeSoftwareEnvironmentHash, type ContainerNativeFingerprint } from '@dsh-scholar/research-schemas'
 import {
   ArtifactKind, ArtifactRecord, BudgetConstraints, BudgetRecord, Claim, CodeSnapshot, CorpusSnapshot, Decision, DirectionGatePayload,
   EvidenceItem, ExecutionConfig, ExperimentContract, FrozenProtocolPin, Gate, IdeaCard, IntegrityConfig, NoveltyAudit,
@@ -6017,7 +6017,7 @@ export class ResearchKernel {
     const project = this.getProject(current.project_id)
     const target = this.listRunnerTargets().find(t => t.target_id === project.execution.runner_target_id)
     const nativeEnvironment = target?.kind === 'container-native'
-      ? { target_id: target.target_id, sha256: this.requireNativeEnvironmentHash(target) } : undefined
+      ? { schema_version: 2 as const, target_id: target.target_id, sha256: this.requireNativeEnvironmentHash(target) } : undefined
     const next: ExperimentContract = {
       ...current,
       status: 'approved',
@@ -6031,11 +6031,11 @@ export class ResearchKernel {
 
   private requireNativeEnvironmentHash(target: { health: string; last_seen_at: string | null; native_observation?: ContainerNativeFingerprint }): string {
     if (target.health !== 'online' || !target.last_seen_at || !Number.isFinite(Date.parse(target.last_seen_at))
-      || Date.now() - Date.parse(target.last_seen_at) > 60_000 || target.native_observation?.schema_version !== 2
-      || !target.native_observation.actual_environment_hash) {
-      throw new KernelError(409, 'native_environment_unobserved', 'a fresh authenticated v2 environment observation is required')
+      || Date.now() - Date.parse(target.last_seen_at) > 60_000 || target.native_observation?.schema_version !== 3
+      || !target.native_observation.software_environment_hash) {
+      throw new KernelError(409, 'native_environment_unobserved', 'a fresh authenticated v3 software environment observation is required')
     }
-    return target.native_observation.actual_environment_hash
+    return target.native_observation.software_environment_hash
   }
 
   // ── corpus ───────────────────────────────────────────────────────────────
@@ -6422,6 +6422,7 @@ export class ResearchKernel {
 
   /** Idempotent job submission: same idempotency_key returns the existing job. */
   submitJob(input: {
+    compute?: DockerCompute
     project_id: string
     idempotency_key: string
     kind: JobRecord['kind']
@@ -6467,7 +6468,16 @@ export class ResearchKernel {
     // yields two independent jobs.
     const existing = this.db.prepare('SELECT * FROM jobs WHERE project_id = ? AND idempotency_key = ?')
       .get(input.project_id, input.idempotency_key) as JobRow | undefined
-    if (existing !== undefined) return jobFromRow(existing, this.db, this.leaseTokens.get(existing.job_id) ?? null)
+    if (existing !== undefined) {
+      const job = jobFromRow(existing, this.db, this.leaseTokens.get(existing.job_id) ?? null)
+      if (input.compute !== undefined) {
+        if (job.payload.runner_target_kind !== 'container-native') throw new KernelError(422, 'compute_target_unsupported', 'task compute is only supported by container-native')
+        const requested = DockerCompute.safeParse(input.compute)
+        if (!requested.success) throw new KernelError(422, 'compute_invalid', requested.error.message)
+        if (canonicalJsonDeep(requested.data) !== canonicalJsonDeep(job.payload.runner_compute)) throw new KernelError(409, 'idempotency_conflict', 'changing compute requires a new Job idempotency key')
+      }
+      return job
+    }
     // v2 §3.2 / §12.3: formal-class jobs require a container runner profile;
     // isolated-subprocess is rejected at submission time (kernel layer).
     // domain-model.md §2/§9.1: Job 只引用已登记的 opaque profile id ——
@@ -6492,6 +6502,19 @@ export class ResearchKernel {
     const runnerTarget = this.listRunnerTargets().find(target => target.target_id === targetRef)
     if (runnerTarget === undefined) {
       throw new KernelError(422, 'runner_target_unknown', `runner target '${targetRef}' is not registered`)
+    }
+    if (input.compute !== undefined && runnerTarget.kind !== 'container-native') {
+      throw new KernelError(422, 'compute_target_unsupported', 'task compute is only supported by container-native')
+    }
+    if (runnerTarget.kind === 'container-native' && runnerProfile.capabilities.includes('gpu') && input.compute === undefined) {
+      throw new KernelError(422, 'native_gpu_selection_required', 'GPU runs require explicit compute.devices; select device ids or explicit all')
+    }
+    const parsedCompute = DockerCompute.safeParse(input.compute === undefined ? { mode: 'cpu' } : input.compute)
+    if (!parsedCompute.success) throw new KernelError(422, 'compute_invalid', parsedCompute.error.message)
+    const compute = runnerTarget.kind === 'container-native' ? parsedCompute.data
+      : runnerProfile.capabilities.includes('gpu') ? { mode: 'nvidia' as const, devices: 'all' as const } : runnerTarget.runtime?.compute ?? { mode: 'cpu' as const }
+    if (runnerTarget.kind === 'container-native' && runnerProfile.capabilities.includes('gpu') !== (compute.mode === 'nvidia')) {
+      throw new KernelError(422, 'compute_profile_mismatch', 'compute mode must match the selected Profile')
     }
     const runnerAssessment = assessRunnerEnvironment(runnerProfile, runnerTarget, ref => this.secretRefAvailable(ref))
     if ((runnerTarget.kind === 'container-native' || runnerProfile.runner_mode === 'container-native')
@@ -6632,7 +6655,8 @@ export class ResearchKernel {
     const CONTRACT_BOUND_KINDS: readonly string[] = ['baseline', 'pilot', 'formal', 'reproduce']
     let contractMetricNames: string[] | undefined
     let approvedContractBinding: ExperimentContract | null = null
-    let expectedEnvironmentHash: string | undefined
+    let expectedEnvironmentHash: string | undefined = runnerTarget.kind === 'container-native' && !CONTRACT_BOUND_KINDS.includes(input.kind) && input.kind !== 'latex-compile'
+      ? this.requireNativeEnvironmentHash(runnerTarget) : undefined
     if (CONTRACT_BOUND_KINDS.includes(input.kind)) {
       const contractId = input.contract_id ?? null
       if (contractId === null || contractId === '') {
@@ -6654,7 +6678,7 @@ export class ResearchKernel {
       contractMetricNames = [contract.metrics.primary, ...contract.metrics.secondary]
       if (runnerTarget.kind === 'container-native') {
         const pin = contract.approval.native_environment
-        if (!pin || pin.target_id !== runnerTarget.target_id) throw new KernelError(422, 'native_environment_approval_required', 'approve a new Contract revision for this native target and environment')
+        if (!pin || pin.schema_version !== 2 || pin.target_id !== runnerTarget.target_id) throw new KernelError(422, 'native_environment_approval_required', 'approve a new Contract revision with the v2 software pin for this native target')
         expectedEnvironmentHash = pin.sha256
         if (this.requireNativeEnvironmentHash(runnerTarget) !== expectedEnvironmentHash) throw new KernelError(409, 'environment_changed', 'native environment differs from the approved Contract')
       }
@@ -6815,10 +6839,9 @@ export class ResearchKernel {
           `methodology run admission denied: ${admission.blockers.join(',')}`)
       }
     }
-    const compute = runnerTarget.native_compute ?? (runnerProfile.capabilities.includes('gpu')
-      ? { mode: 'nvidia' as const, devices: 'all' as const } : runnerTarget.runtime?.compute ?? { mode: 'cpu' as const })
     const gpuUuids = runnerTarget.kind === 'container-native' && compute.mode === 'nvidia'
-      ? (runnerTarget.native_observation?.gpu_devices ?? []).filter(d => compute.devices === 'all' || compute.devices.includes(d.index)).map(d => d.uuid).sort() : undefined
+      ? (compute.devices === 'all' ? (runnerTarget.native_observation?.gpu_devices ?? []).map(d => d.uuid)
+        : compute.devices.map(id => runnerTarget.native_observation?.gpu_devices.find(d => d.index === id)?.uuid).filter((uuid): uuid is string => uuid !== undefined)) : undefined
     if (gpuUuids !== undefined && (gpuUuids.length === 0 || (compute.mode === 'nvidia' && compute.devices !== 'all' && gpuUuids.length !== compute.devices.length))) {
       throw new KernelError(409, 'native_gpu_unobserved', 'requested GPU devices require an authenticated observation')
     }
@@ -6845,6 +6868,8 @@ export class ResearchKernel {
       runner_compute: compute,
       expected_environment_hash: expectedEnvironmentHash,
       native_gpu_uuids: gpuUuids,
+      native_gpu_devices: gpuUuids?.map(uuid => runnerTarget.native_observation!.gpu_devices.find(device => device.uuid === uuid)!),
+      ...(runnerTarget.kind === 'container-native' ? { native_environment_pin_version: 2 } : {}),
       ...(input.data_artifact_ids !== undefined ? { data_artifact_ids: input.data_artifact_ids } : {}),
       ...(input.output_contract !== undefined ? { output_contract: input.output_contract } : {}),
       protocol_pin: requestedProtocolPin,
@@ -6918,6 +6943,8 @@ export class ResearchKernel {
    * Project revision; generic Job submission is never a baseline entrypoint.
    */
   startBaselineRun(input: {
+    compute?: DockerCompute
+    runner_profile_id?: string | null
     project_id: string
     expected_revision: number
     idempotency_key: string
@@ -6949,6 +6976,8 @@ export class ResearchKernel {
       data_artifact_ids: input.data_artifact_ids ?? [],
       command,
       runner_target_id: input.runner_target_id ?? null,
+      ...(input.compute === undefined ? {} : { compute: input.compute }),
+      ...(input.runner_profile_id === undefined ? {} : { runner_profile_id: input.runner_profile_id }),
       image_digest: input.image_digest ?? null,
       output_contract: input.output_contract ?? null,
       created_by_principal_id: input.created_by_principal_id ?? null,
@@ -7015,6 +7044,8 @@ export class ResearchKernel {
         code_snapshot_id: input.code_snapshot_id,
         data_artifact_ids: input.data_artifact_ids,
         runner_target_id: targetId,
+        runner_profile_id: input.runner_profile_id,
+        compute: input.compute,
         image_digest: imageDigest,
         output_contract: outputContract,
         created_by_principal_id: input.created_by_principal_id ?? null,
@@ -7430,7 +7461,7 @@ export class ResearchKernel {
         if (payload.runner_target_kind === 'container-native') {
           const current = this.listRunnerTargets().find(t => t.target_id === pinnedTargetId)
           if (!current?.enabled || current.draining || current.revision !== payload.runner_target_revision || runnerTargetConfigHash(current) !== payload.runner_target_hash) return null
-          if (payload.expected_environment_hash !== undefined && current?.native_observation?.actual_environment_hash !== payload.expected_environment_hash) return null
+          if (payload.expected_environment_hash !== undefined && (payload.native_environment_pin_version === 2 ? current.native_observation?.software_environment_hash : current.native_observation?.actual_environment_hash) !== payload.expected_environment_hash) return null
           const requested = Array.isArray(payload.native_gpu_uuids) ? payload.native_gpu_uuids as string[] : undefined
           if ((payload.runner_compute as { mode?: string } | undefined)?.mode === 'nvidia' && !requested?.length) return null
           if (requested?.length) {
@@ -7910,21 +7941,33 @@ export class ResearchKernel {
       }
       const profile = getRunnerProfile(String(job.payload.runner_profile_id))
       const fingerprint = environment.data.fingerprint
+      const softwarePin = job.payload.native_environment_pin_version === 2
+      const resources = manifest.resources as { gpu?: number; gpu_mode?: string; gpu_devices?: unknown } | undefined
+      if (softwarePin && (fingerprint.schema_version !== 3
+        || resources?.gpu !== (fingerprint.selected_gpu_uuids ?? []).length
+        || (fingerprint.compute.mode === 'nvidia' && (resources?.gpu_mode !== 'nvidia' || canonicalJsonDeep(resources?.gpu_devices ?? null) !== canonicalJsonDeep(fingerprint.compute.devices)))
+        || (fingerprint.compute.mode === 'cpu' && (resources?.gpu_mode !== undefined || resources?.gpu_devices !== undefined))
+        || canonicalJsonDeep(fingerprint.requested_gpu_devices ?? null) !== canonicalJsonDeep(job.payload.native_gpu_devices ?? [])
+        || canonicalJsonDeep(fingerprint.selected_gpu_uuids ?? null) !== canonicalJsonDeep(job.payload.native_gpu_uuids ?? [])
+        || (fingerprint.selected_gpu_uuids ?? []).some(uuid => !fingerprint.gpu_devices.some(device => device.uuid === uuid)))) {
+        throw new KernelError(422, 'manifest_environment_mismatch', 'native allocation must match the ordered Job UUID pin')
+      }
       if (job.kind !== 'latex-compile') {
         if (typeof job.payload.expected_environment_hash !== 'string'
-          || fingerprint.actual_environment_hash !== job.payload.expected_environment_hash
-          || manifest.native_environment_artifact !== job.payload.expected_environment_hash) {
+          || (softwarePin ? fingerprint.software_environment_hash : fingerprint.actual_environment_hash) !== job.payload.expected_environment_hash
+          || manifest.native_environment_artifact !== fingerprint.actual_environment_hash) {
           throw new KernelError(422, 'manifest_environment_mismatch', 'actual native environment must match the approved Job pin and snapshot Artifact')
         }
         try {
           const artifact = this.getArtifact(job.project_id, String(manifest.native_environment_artifact))
           const snapshot = NativeEnvironmentSnapshot.parse(JSON.parse(this.cas.read(artifact.sha256).toString('utf8')))
-          if (nativeEnvironmentSnapshotHash(snapshot) !== job.payload.expected_environment_hash) throw new Error('snapshot hash mismatch')
+          if (nativeEnvironmentSnapshotHash(snapshot) !== fingerprint.actual_environment_hash
+            || (softwarePin ? nativeSoftwareEnvironmentHash(snapshot) : nativeEnvironmentSnapshotHash(snapshot)) !== job.payload.expected_environment_hash) throw new Error('snapshot hash mismatch')
           if (snapshot.os !== fingerprint.os || snapshot.arch !== fingerprint.arch || snapshot.node.version !== fingerprint.node_version
             || (snapshot.python === null ? null : `Python ${snapshot.python.version}`) !== fingerprint.python_version
             || snapshot.cuda_version !== fingerprint.cuda_version || snapshot.driver_version !== fingerprint.nvidia_driver_version
             || canonicalJsonDeep(snapshot.gpu_uuids) !== canonicalJsonDeep(fingerprint.gpu_devices.map(d => d.uuid).sort())) throw new Error('snapshot facts mismatch')
-          if (fingerprint.compute.mode === 'nvidia') {
+          if (fingerprint.compute.mode === 'nvidia' && !softwarePin) {
             const compute = fingerprint.compute
             const selected = fingerprint.gpu_devices.filter(d => compute.devices === 'all' || compute.devices.includes(d.index)).map(d => d.uuid).sort()
             if (canonicalJsonDeep(selected) !== canonicalJsonDeep(job.payload.native_gpu_uuids)) throw new Error('GPU UUID pin mismatch')
@@ -7933,10 +7976,10 @@ export class ResearchKernel {
           throw new KernelError(422, 'manifest_environment_mismatch', 'native environment snapshot is missing or invalid')
         }
       }
-      const resources = profile?.capabilities.includes('native-cgroup-v2') === true
+      const resourceIsolation = profile?.capabilities.includes('native-cgroup-v2') === true
       if (!profile || fingerprint.network_isolation !== (profile.network_policy === 'none' ? 'network-namespace' : 'not-enforced')
-        || fingerprint.resource_isolation !== (resources ? 'cgroup-v2' : 'parent-container')
-        || (resources && canonicalJsonDeep(fingerprint.enforced_limits) !== canonicalJsonDeep(profile.limits))) {
+        || fingerprint.resource_isolation !== (resourceIsolation ? 'cgroup-v2' : 'parent-container')
+        || (resourceIsolation && canonicalJsonDeep(fingerprint.enforced_limits) !== canonicalJsonDeep(profile.limits))) {
         throw new KernelError(422, 'manifest_environment_mismatch', 'native isolation must match the pinned profile and limits')
       }
     }

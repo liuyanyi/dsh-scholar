@@ -57,7 +57,7 @@ export function buildRunManifest(input: RunManifestInput): Record<string, unknow
     command: input.command,
     resources: input.compute.mode === 'nvidia'
       ? {
-          gpu: input.compute.devices === 'all' ? 1 : input.compute.devices.length,
+          gpu: input.execution_environment?.fingerprint.selected_gpu_uuids?.length ?? (input.compute.devices === 'all' ? 1 : input.compute.devices.length),
           gpu_mode: 'nvidia',
           gpu_devices: input.compute.devices,
           cpu: 1,

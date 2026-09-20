@@ -334,7 +334,7 @@ async function heartbeatLocalTarget(): Promise<void> {
   if (runnerTargetToken === undefined || runnerTargetToken === '' || Date.now() < nextTargetHeartbeatAt) return
   const target = await client.getRunnerTarget(localTargetId)
   const observation = mode === 'container-native'
-    ? await collectNativeEnvironment(process.cwd(), target.native_compute ?? { mode: 'cpu' }, RUNNER_PROFILES_IMAGES_LOCK.node_fixture)
+    ? await collectNativeEnvironment(process.cwd(), { mode: 'cpu' }, RUNNER_PROFILES_IMAGES_LOCK.node_fixture)
     : undefined
   await client.heartbeatRunnerTarget(localTargetId, {
     expected_revision: target.revision, health: 'online',

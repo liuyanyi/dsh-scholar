@@ -27,6 +27,7 @@ describe('native actual Python environment identity', () => {
     expect(upgraded.runtime_snapshot.python?.distributions.find(d => d.name === 'packaging')?.version).toBe('25.0')
     expect(upgraded.fingerprint.dependency_lock_hash).toBe(first.fingerprint.dependency_lock_hash)
     expect(upgraded.fingerprint.actual_environment_hash).not.toBe(first.fingerprint.actual_environment_hash)
+    expect(upgraded.fingerprint.software_environment_hash).not.toBe(first.fingerprint.software_environment_hash)
     console.log('Real uv drift detected: packaging 24.2 -> 25.0; declared lock unchanged')
   }, 120000)
   it('detects installed version and RECORD drift while the declared lock stays unchanged', async () => {
@@ -46,10 +47,34 @@ describe('native actual Python environment identity', () => {
     installed = '2.7.1'; record = `sha256:${'2'.repeat(64)}`
     const reinstalled = await collectNativeEnvironment(root, { mode: 'cpu' }, profile.image, {}, probe)
     expect(reinstalled.fingerprint.actual_environment_hash).not.toBe(first.fingerprint.actual_environment_hash)
+    expect(reinstalled.fingerprint.software_environment_hash).not.toBe(first.fingerprint.software_environment_hash)
     expect(JSON.stringify(first.runtime_snapshot)).not.toContain(root)
   })
   it('rejects an interpreter whose inventory cannot be collected', async () => {
     await expect(collectNativeEnvironment('/tmp', { mode: 'cpu' }, profile.image, {}, async (cmd, args) => cmd === 'python' && args[0] === '--version' ? 'Python 3.12.3' : null)).rejects.toThrow('native_python_inventory_unavailable')
+  })
+  it('keeps software pin stable across GPU visibility and index changes, while retaining full observation hashes', async () => {
+    let rows = '2, GPU-aaaa, 595.1\n5, GPU-bbbb, 595.1'
+    const probe = async (cmd: string) => cmd === 'nvidia-smi' ? rows : null
+    const first = await collectNativeEnvironment('/tmp', { mode: 'cpu' }, profile.image, {}, probe)
+    rows = '7, GPU-cccc, 595.1'
+    const changed = await collectNativeEnvironment('/tmp', { mode: 'cpu' }, profile.image, {}, probe)
+    expect(changed.fingerprint.actual_environment_hash).not.toBe(first.fingerprint.actual_environment_hash)
+    expect(changed.fingerprint_hash).not.toBe(first.fingerprint_hash)
+    expect(changed.fingerprint.software_environment_hash).toBe(first.fingerprint.software_environment_hash)
+    rows = '7, GPU-cccc, 600.1'
+    const driver = await collectNativeEnvironment('/tmp', { mode: 'cpu' }, profile.image, {}, probe)
+    expect(driver.fingerprint.software_environment_hash).not.toBe(first.fingerprint.software_environment_hash)
+  })
+  it('enforces both parent visibility filters and refuses disappeared pinned UUIDs', async () => {
+    const probe = async (cmd: string) => cmd === 'nvidia-smi' ? '2, GPU-aaaa, 595.1\n5, GPU-bbbb, 595.1' : null
+    const compute = { mode: 'nvidia' as const, devices: ['5', '2'] }
+    for (const source of [{ CUDA_VISIBLE_DEVICES: '2' }, { NVIDIA_VISIBLE_DEVICES: 'GPU-aaaa' }, { CUDA_VISIBLE_DEVICES: '' }, { NVIDIA_VISIBLE_DEVICES: 'none' }]) {
+      await expect(collectNativeEnvironment('/tmp', compute, profile.image, source, probe, 'python', ['GPU-bbbb', 'GPU-aaaa'])).rejects.toThrow('native_gpu_unavailable')
+    }
+    await expect(collectNativeEnvironment('/tmp', compute, profile.image, {}, probe, 'python', ['GPU-cccc'])).rejects.toThrow('native_gpu_unavailable')
+    const observed = await collectNativeEnvironment('/tmp', compute, profile.image, { CUDA_VISIBLE_DEVICES: 'GPU-bbbb,GPU-aaaa', NVIDIA_VISIBLE_DEVICES: 'all' }, probe, 'python', ['GPU-bbbb', 'GPU-aaaa'])
+    expect(observed.fingerprint.gpu_devices).toHaveLength(2)
   })
 })
 

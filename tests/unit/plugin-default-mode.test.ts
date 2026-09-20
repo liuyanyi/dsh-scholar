@@ -143,11 +143,15 @@ describe('DSH plugin defaultMode', () => {
       data_artifact_id: `sha256:${'b'.repeat(64)}`,
       command_json: '["python","train.py"]',
       runner_target_id: 'target-remote-1',
+      runner_profile_id: 'profile_container_native_gpu_v1',
+      compute_json: '{"mode":"nvidia","devices":["5","2"]}',
       image_digest: `node@sha256:${'a'.repeat(64)}`,
       output_contract_json: '{"metrics":"/outputs/metrics.json","logs":"/outputs/run.log"}',
     }, { agent: { id: 'pi' }, signal: new AbortController().signal })
 
     expect(genericSubmits).toBe(0)
+    expect(request?.compute).toEqual({ mode: 'nvidia', devices: ['5', '2'] })
+    expect(request?.runner_profile_id).toBe('profile_container_native_gpu_v1')
     expect(request).toEqual({
       project_id: 'rsp_atomic',
       expected_revision: 7,
@@ -158,6 +162,8 @@ describe('DSH plugin defaultMode', () => {
       data_artifact_ids: [`sha256:${'b'.repeat(64)}`],
       command: ['python', 'train.py'],
       runner_target_id: 'target-remote-1',
+      runner_profile_id: 'profile_container_native_gpu_v1',
+      compute: { mode: 'nvidia', devices: ['5', '2'] },
       image_digest: `node@sha256:${'a'.repeat(64)}`,
       output_contract: { metrics: '/outputs/metrics.json', logs: '/outputs/run.log' },
     })

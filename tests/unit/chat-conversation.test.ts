@@ -225,6 +225,8 @@ describe('project-scoped free conversation', () => {
   it('starts a complete baseline request through the atomic handoff endpoint', async () => {
     const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
+      if (path.endsWith('/v1/projects/prj_1')) return json({ execution: { runner_target_id: 'target_local_docker_v1', runner_profile_id: 'profile_local_docker_cpu_v1' } })
+      if (path.endsWith('/v1/runner-targets')) return json([{ target_id: 'target_local_docker_v1', kind: 'local-docker' }])
       if (path.includes('/v1/projects/prj_1/projection')) {
         return json({ project: { project_id: 'prj_1', status: 'CONTRACT_APPROVED', revision: 7 }, next_actions_v2: [] })
       }

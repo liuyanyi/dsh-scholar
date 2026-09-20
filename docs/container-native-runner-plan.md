@@ -438,7 +438,7 @@ GPU profile：
 
 - target 必须声明 NVIDIA/GPU capability；
 - 启动前采集 GPU readiness；
-- `devices=all` 时使用当前容器可见设备集合；
+- GPU 必须在每次提交的 compute 中明确选择设备；显式 `devices=all` 在提交时固定当前允许设备 UUID，执行时不得扩大；
 - 指定 device 时校验设备存在；
 - 不通过 Docker `--gpus` 控制设备。
 

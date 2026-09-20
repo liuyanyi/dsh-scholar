@@ -49,7 +49,7 @@ export const ExperimentContract = z.object({
     gate_decision_id: z.string().optional(),
     approved_at: z.string().optional(),
     approved_by: z.string().optional(),
-    native_environment: z.object({ target_id: z.string(), sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict().optional(),
+    native_environment: z.object({ schema_version: z.literal(2).optional(), target_id: z.string(), sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/) }).strict().optional(),
   }).optional(),
   created_at: z.string(),
   updated_at: z.string(),

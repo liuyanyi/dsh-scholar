@@ -31,6 +31,7 @@ import type { JobRecord } from './kernel.js'
 import { computeProfileConfigHash, getRunnerProfile, PROFILE_CONFIG_HASH_RE } from './runner-profile.js'
 import { RunnerTargetKind } from './runner-target.js'
 import { DOCKER_IMAGE_DIGEST_RE, DockerCompute } from './runner-environment.js'
+import { NativeGpuDevice } from './container-native.js'
 
 /** 本地 Docker target 的稳定 opaque id（Kernel/gateway/注册表共用）。 */
 export const LOCAL_DOCKER_TARGET_ID = 'local-docker'
@@ -143,6 +144,8 @@ export const ExecutionPlan = z.object({
   target_config_hash: z.string().regex(PROFILE_CONFIG_HASH_RE, 'target_config_hash must be sha256:<64 hex>'),
   expected_environment_hash: z.string().regex(PROFILE_CONFIG_HASH_RE).optional(),
   native_gpu_uuids: z.array(z.string().regex(/^GPU-[a-fA-F0-9-]+$/)).optional(),
+  native_gpu_devices: z.array(NativeGpuDevice).optional(),
+  native_environment_pin_version: z.literal(2).optional(),
   lease: LeaseBinding,
   /** Kernel 提交 Job 时固定的 exact Project effective config pin（CONFIG-01）。 */
   config_pin: z.string().regex(PROFILE_CONFIG_HASH_RE, 'config_pin must be sha256:<64 hex>'),
@@ -311,6 +314,8 @@ export function buildExecutionPlan(job: JobRecord, options: BuildExecutionPlanOp
     target_config_hash: targetConfigHash,
     ...(payload?.expected_environment_hash === undefined ? {} : { expected_environment_hash: z.string().regex(PROFILE_CONFIG_HASH_RE).parse(payload.expected_environment_hash) }),
     ...(payload?.native_gpu_uuids === undefined ? {} : { native_gpu_uuids: z.array(z.string().regex(/^GPU-[a-fA-F0-9-]+$/)).parse(payload.native_gpu_uuids) }),
+    ...(payload?.native_gpu_devices === undefined ? {} : { native_gpu_devices: z.array(NativeGpuDevice).parse(payload.native_gpu_devices) }),
+    ...(payload?.native_environment_pin_version === undefined ? {} : { native_environment_pin_version: z.literal(2).parse(payload.native_environment_pin_version) }),
     data_hash: typeof payload?.data_hash === 'string' ? payload.data_hash : '',
     code_commit: typeof payload?.code_commit === 'string' ? payload.code_commit : '',
     lease: {

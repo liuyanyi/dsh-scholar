@@ -129,6 +129,8 @@ Claim
 
 不引入 Docker-in-Docker。
 
+Target 描述执行环境与能力；每个 Run 单独选择 GPU。普通 native 提供受信任科研代码的 best-effort 隔离，不要求 cgroup 委派或 namespace 权限。软件环境审批 pin 与本次设备分配分开记录：仅换卡不修改 Target、不重启 Runner，也不因此重新审批新的软件 pin Contract/Protocol。
+
 具体工程设计见：
 
 `docs/container-native-runner-plan.md`
